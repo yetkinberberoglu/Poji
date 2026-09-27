@@ -1,0 +1,172 @@
+// Supabase Edge Function — sends WhatsApp messages via Twilio
+// Deploy:  supabase functions deploy send-notification
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const TWILIO_SID   = Deno.env.get('TWILIO_ACCOUNT_SID')!;
+const TWILIO_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN')!;
+const TWILIO_FROM  = Deno.env.get('TWILIO_WHATSAPP_FROM')!; // e.g. whatsapp:+14155238886
+
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SERVICE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+// ── Message templates ──
+function buildMessage(template: string, d: Record<string, any>): string {
+  switch (template) {
+    case 'new_job_offer':
+      return `🔔 *New job on Poji*\n\n`
+        + `📍 ${d.address}\n`
+        + `📅 ${d.date} at ${d.time}\n`
+        + `⏱ ${d.hours}h × ${d.numCleaners} cleaner${d.numCleaners > 1 ? 's' : ''}\n`
+        + `🧹 ${String(d.serviceType || 'standard').replace('_', ' ')}\n\n`
+        + `💰 *You earn €${Number(d.earnings).toFixed(2)}*\n\n`
+        + `You have priority on this job for 5 minutes.\n`
+        + `Open Poji to accept: ${d.appUrl}`;
+
+    case 'job_in_pool':
+      return `🌐 *Job available on Poji*\n\n`
+        + `📍 ${d.address}\n`
+        + `📅 ${d.date} at ${d.time}\n`
+        + `⏱ ${d.hours}h\n\n`
+        + `💰 *You earn €${Number(d.earnings).toFixed(2)}*\n\n`
+        + `First to accept gets it: ${d.appUrl}`;
+
+    case 'booking_confirmed':
+      return `✅ *Booking confirmed*\n\n`
+        + `${d.cleanerName} accepted your job.\n\n`
+        + `📅 ${d.date} at ${d.time}\n`
+        + `📍 ${d.address}\n\n`
+        + `We'll let you know when they're on the way.`;
+
+    case 'cleaner_on_way':
+      return `🚗 *${d.cleanerName} is on the way*\n\n`
+        + `They'll arrive shortly at ${d.address}.\n\n`
+        + `Open Poji to see your PIN when they arrive.`;
+
+    case 'cleaner_arrived':
+      return `🔐 *${d.cleanerName} has arrived*\n\n`
+        + `Your PIN is *${d.pin}*\n\n`
+        + `Give it to them to start the job.`;
+
+    case 'job_finished':
+      return `👀 *Job finished*\n\n`
+        + `${d.cleanerName} marked the job as complete.\n\n`
+        + `Please check the work and confirm in the app.\n`
+        + `If you don't respond within 6 hours it's approved automatically.\n\n`
+        + `${d.appUrl}`;
+
+    case 'job_completed':
+      return `🎉 *Job completed*\n\n`
+        + `€${Number(d.earnings).toFixed(2)} will be paid to your account.\n\n`
+        + `Thanks for working with Poji.`;
+
+    case 'application_approved':
+      return `🎉 *You're verified on Poji!*\n\n`
+        + `Your profile is live. Clients can now book you.\n\n`
+        + `Open the app: ${d.appUrl}`;
+
+    case 'application_rejected':
+      return `⚠️ *Your Poji application needs changes*\n\n`
+        + `${d.reason}\n\n`
+        + `Update your details and resubmit: ${d.appUrl}`;
+
+    default:
+      return d.body || 'Poji notification';
+  }
+}
+
+async function sendWhatsApp(to: string, body: string) {
+  const cleaned = to.replace(/[^\d+]/g, '');
+  const target  = cleaned.startsWith('+') ? cleaned : `+356${cleaned}`;
+
+  const form = new URLSearchParams({
+    From: TWILIO_FROM,
+    To:   `whatsapp:${target}`,
+    Body: body,
+  });
+
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + btoa(`${TWILIO_SID}:${TWILIO_TOKEN}`),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+    }
+  );
+
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.message || 'Twilio error');
+  return json.sid as string;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
+  try {
+    const { userId, bookingId, template, data } = await req.json();
+    const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
+
+    // Find the recipient's phone number
+    let phone: string | null = null;
+    let optIn = true;
+
+    const { data: cp } = await supabase
+      .from('client_profiles').select('phone, whatsapp_opt_in').eq('id', userId).maybeSingle();
+    if (cp?.phone) { phone = cp.phone; optIn = cp.whatsapp_opt_in ?? true; }
+
+    if (!phone) {
+      const { data: clp } = await supabase
+        .from('cleaner_profiles').select('phone, whatsapp_opt_in').eq('id', userId).maybeSingle();
+      if (clp?.phone) { phone = clp.phone; optIn = clp.whatsapp_opt_in ?? true; }
+    }
+
+    const body = buildMessage(template, { ...data, appUrl: data?.appUrl || 'https://poji.mt' });
+
+    // Log the attempt
+    const { data: logRow } = await supabase.from('notifications').insert({
+      user_id: userId, booking_id: bookingId || null,
+      channel: 'whatsapp', template, recipient: phone, body,
+      status: 'queued',
+    }).select().single();
+
+    if (!phone) {
+      await supabase.from('notifications')
+        .update({ status: 'failed', error: 'No phone number on file' }).eq('id', logRow.id);
+      return new Response(JSON.stringify({ ok: false, reason: 'no_phone' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    if (!optIn) {
+      await supabase.from('notifications')
+        .update({ status: 'failed', error: 'User opted out' }).eq('id', logRow.id);
+      return new Response(JSON.stringify({ ok: false, reason: 'opted_out' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    try {
+      const sid = await sendWhatsApp(phone, body);
+      await supabase.from('notifications')
+        .update({ status: 'sent', provider_id: sid, sent_at: new Date().toISOString() })
+        .eq('id', logRow.id);
+      return new Response(JSON.stringify({ ok: true, sid }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    } catch (e) {
+      await supabase.from('notifications')
+        .update({ status: 'failed', error: String(e) }).eq('id', logRow.id);
+      return new Response(JSON.stringify({ ok: false, error: String(e) }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+  } catch (e) {
+    return new Response(JSON.stringify({ ok: false, error: String(e) }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+});

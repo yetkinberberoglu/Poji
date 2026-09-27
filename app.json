@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Poji",
+    "slug": "poji",
+    "version": "1.0.0",
+    "scheme": "poji",
+    "web": { "bundler": "metro", "output": "single" },
+    "plugins": ["expo-router"],
+    "experiments": { "typedRoutes": true }
+  }
+}
