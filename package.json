@@ -6,7 +6,8 @@
     "start": "expo start",
     "web": "expo start --web",
     "ios": "expo start --ios",
-    "android": "expo start --android"
+    "android": "expo start --android",
+    "build": "chmod +x node_modules/.bin/expo && npx expo export --platform web"
   },
   "dependencies": {
     "expo": "~51.0.0",
