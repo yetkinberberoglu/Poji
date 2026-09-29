@@ -4,7 +4,19 @@
     "slug": "poji",
     "version": "1.0.0",
     "scheme": "poji",
-    "web": { "bundler": "metro", "output": "single" },
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "name": "Poji",
+      "shortName": "Poji",
+      "lang": "en",
+      "themeColor": "#4F46E5",
+      "backgroundColor": "#F8FAFF",
+      "description": "Book verified cleaners in Malta. Transparent pricing, pay for the time actually worked."
+    },
     "plugins": ["expo-router"],
     "experiments": { "typedRoutes": true }
   }
