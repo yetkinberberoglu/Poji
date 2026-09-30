@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { router } from 'expo-router';
 import { AppProvider } from '../context/AppContext';
 import { supabase } from '../lib/supabase';
+import InstallPrompt from './install-prompt';
 
 async function redirect() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -61,6 +62,7 @@ export default function RootLayout() {
         <Stack.Screen name="provider" />
         <Stack.Screen name="review" />
       </Stack>
+      <InstallPrompt />
     </AppProvider>
   );
 }

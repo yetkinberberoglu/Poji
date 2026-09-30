@@ -1,0 +1,39 @@
+{
+  "name": "Poji — Home services in Malta",
+  "short_name": "Poji",
+  "description": "Book verified cleaners and tradespeople in Malta. Transparent pricing, pay for the time actually worked.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F8FAFF",
+  "theme_color": "#4F46E5",
+  "lang": "en",
+  "categories": ["lifestyle", "productivity", "business"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Book a cleaner",
+      "short_name": "Clean",
+      "url": "/services?category=cleaning",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Roadside help",
+      "short_name": "Roadside",
+      "url": "/roadside",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "My bookings",
+      "short_name": "Bookings",
+      "url": "/bookings",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

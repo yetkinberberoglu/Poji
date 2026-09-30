@@ -6,16 +6,20 @@
     "scheme": "poji",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./public/icon-512.png",
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/favicon.png",
+      "favicon": "./public/favicon.png",
       "name": "Poji",
       "shortName": "Poji",
       "lang": "en",
       "themeColor": "#4F46E5",
       "backgroundColor": "#F8FAFF",
-      "description": "Book verified cleaners in Malta. Transparent pricing, pay for the time actually worked."
+      "display": "standalone",
+      "startUrl": "/",
+      "orientation": "portrait",
+      "description": "Book verified cleaners and tradespeople in Malta. Transparent pricing, pay for the time actually worked."
     },
     "plugins": ["expo-router"],
     "experiments": { "typedRoutes": true }
