@@ -19,7 +19,7 @@ const DATE_VALUES: Record<string,string> = {
   'Thu 4 Sep':'2026-09-04','Fri 5 Sep':'2026-09-05','Sat 6 Sep':'2026-09-06','Sun 7 Sep':'2026-09-07'
 };
 const TIMES = ['08:00','09:00','10:00','11:00','12:00','14:00','15:00','16:00','17:00'];
-const STEPS = ['Service','Home','Date & Time','Confirm'];
+const STEPS = ['Service','Place','Extras','Cleaner','When','Confirm'];
 
 const fmtH = (h:number) => h % 1 === 0 ? `${h}h` : `${Math.floor(h)}h 30m`;
 
@@ -44,6 +44,7 @@ export default function BookingScreen() {
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
   const [num, setNum]   = useState(1);
+  const [pickedCleaner, setPicked] = useState<string|null>(params.cleanerId || null);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [manualHours, setManualHours] = useState<number|null>(null);
@@ -51,31 +52,37 @@ export default function BookingScreen() {
   const [showTasks, setShowTasks]   = useState<string|null>(null);
   const [taskGroups, setTaskGroups] = useState<Record<string,string[]>>({});
 
-  const cleanerId   = params.cleanerId || cleaners[0]?.id || '';
-  const cleanerName = params.cleanerName || cleaners[0]?.name || 'Cleaner';
-  const cleaner     = cleaners.find(c=>c.id===cleanerId) || cleaners[0];
-
-  const baseRate = cleaner?.rate ?? 15;
-  const maxTeam  = (cleaner as any)?.teamSize ?? 1;
-  const svcType  = types.find(t => t.id === svc);
-  const sizeObj  = sizes.find(z => z.id === size);
+  const svcType = types.find(t => t.id === svc);
+  const sizeObj = sizes.find(z => z.id === size);
 
   const multiplier  = svcType?.multiplier ?? 1;
   const baseMinutes = svcType?.base_minutes ?? 120;
   const sizeFactor  = sizeObj?.factor ?? 1;
   const svcMinHours = svcType?.min_hours ?? 3;
-  const cleanerMin  = (cleaner as any)?.minHours ?? 2;
-  const minHours    = Math.max(svcMinHours, cleanerMin);
 
   const selectedExtras = extras.filter(e => chosenExtras.includes(e.id));
   const extraMinutes   = selectedExtras.reduce((s,e)=>s+Number(e.extra_minutes),0);
 
-  const est = estimateHours({
-    baseMinutes, sizeFactor, extraMinutes, minHours, numCleaners: num,
-  });
+  // cleaners who can send this many people
+  const capable = cleaners.filter(c => ((c as any).teamSize ?? 1) >= num);
+  const cleaner = cleaners.find(c => c.id === pickedCleaner) || null;
+
+  // hours depend on the chosen cleaner's minimum
+  const cleanerMin = (cleaner as any)?.minHours ?? 2;
+  const minHours   = Math.max(svcMinHours, cleanerMin);
+  const est = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours, numCleaners: num });
   const hours = manualHours ?? est.hours;
 
+  const baseRate = cleaner?.rate ?? 0;
   const p = quote({ baseRate, hours, numCleaners: num, multiplier, suppliesByCleaner });
+
+  /** what a given cleaner would charge for this exact job */
+  const quoteFor = (c: any) => {
+    const cMin = Math.max(svcMinHours, c.minHours ?? 2);
+    const e = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours: cMin, numCleaners: num });
+    const q = quote({ baseRate: c.rate, hours: e.hours, numCleaners: num, multiplier, suppliesByCleaner });
+    return { hours: e.hours, total: q.clientPays };
+  };
 
   useEffect(() => {
     (async () => {
@@ -103,9 +110,12 @@ export default function BookingScreen() {
     })();
   }, []);
 
-  // any change to scope resets a manual override
   useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
-  useEffect(() => { if (num > maxTeam) setNum(maxTeam); }, [maxTeam]);
+
+  // drop a cleaner who can no longer cover the team size
+  useEffect(() => {
+    if (pickedCleaner && !capable.find(c => c.id === pickedCleaner)) setPicked(null);
+  }, [num, cleaners]);
 
   const openTasks = async (typeId: string) => {
     const tasks = await loadTasksFor(typeId);
@@ -117,10 +127,11 @@ export default function BookingScreen() {
     setChosen(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
 
   const confirm = async () => {
+    if (!cleaner) return;
     setLoad(true);
     try {
       await addBooking({
-        cleanerId,
+        cleanerId: cleaner.id,
         address: address || '12 Tower Road, Sliema',
         date: DATE_VALUES[date] || '2026-09-01',
         time: time || '10:00',
@@ -140,7 +151,16 @@ export default function BookingScreen() {
     finally { setLoad(false); }
   };
 
-  const canContinue = step === 1 ? !!address : true;
+  const canContinue =
+    step === 1 ? !!address :
+    step === 3 ? !!pickedCleaner :
+    step === 4 ? !!date && !!time :
+    true;
+
+  const blockedMsg =
+    step === 1 ? 'Enter an address first' :
+    step === 3 ? 'Pick a cleaner to continue' :
+    step === 4 ? 'Pick a date and time' : '';
 
   return (
     <View style={s.wrap}>
@@ -165,17 +185,16 @@ export default function BookingScreen() {
 
       <ScrollView style={s.body} showsVerticalScrollIndicator={false}>
 
-        {/* ── STEP 0 — service + extras ── */}
+        {/* ── 0 · SERVICE — no prices here ── */}
         {step===0 && (
           <View style={s.step}>
             {catLoading ? (
               <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
             ) : (
               <>
-                <Text style={s.lbl}>What kind of clean?</Text>
+                <Text style={s.stepIntro}>What kind of clean do you need?</Text>
                 {types.map(t=>{
                   const on = svc===t.id;
-                  const rate = (baseRate*t.multiplier + (suppliesByCleaner?2:0)).toFixed(2);
                   return (
                     <TouchableOpacity key={t.id} style={[s.svcCard, on&&s.svcCardOn]}
                       onPress={()=>setSvc(t.id)}>
@@ -185,56 +204,13 @@ export default function BookingScreen() {
                           <Text style={s.svcName}>{t.name}</Text>
                           <Text style={s.svcDesc}>{t.description}</Text>
                         </View>
-                        <View style={s.svcPrice}>
-                          <Text style={s.svcRate}>€{rate}</Text>
-                          <Text style={s.svcUnit}>/hr</Text>
+                        <View style={[s.radio, on&&s.radioOn]}>
+                          {on && <View style={s.radioDot}/>}
                         </View>
                       </View>
-                      <View style={s.svcFoot}>
-                        <Text style={s.svcMin}>~{Math.round(t.base_minutes/60*10)/10}h for a 1-bed</Text>
-                        <TouchableOpacity onPress={()=>openTasks(t.id)}>
-                          <Text style={s.svcLink}>What's included? ›</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-
-                <Text style={s.lbl}>Cleaning materials</Text>
-                <View style={s.supplyRow}>
-                  {[{k:false,l:'I provide them',d:'No extra charge'},
-                    {k:true, l:'Cleaner brings them',d:'+€2 per hour'}].map(o=>(
-                    <TouchableOpacity key={String(o.k)}
-                      style={[s.supplyCard, suppliesByCleaner===o.k&&s.supplyCardOn]}
-                      onPress={()=>setSupplies(o.k)}>
-                      <Text style={[s.supplyLbl, suppliesByCleaner===o.k&&s.supplyLblOn]}>{o.l}</Text>
-                      <Text style={s.supplyDesc}>{o.d}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={s.lbl}>Anything extra?</Text>
-                <Text style={s.hint}>
-                  Each one adds time to the job — you pay for the extra time, not a separate fee.
-                </Text>
-                {extras.map(e=>{
-                  const on = chosenExtras.includes(e.id);
-                  const cost = (e.extra_minutes/60) * (baseRate*multiplier + (suppliesByCleaner?2:0));
-                  return (
-                    <TouchableOpacity key={e.id} style={[s.extraRow, on&&s.extraRowOn]}
-                      onPress={()=>toggleExtra(e.id)}>
-                      <View style={[s.check, on&&s.checkOn]}>
-                        {on && <Text style={s.checkTxt}>✓</Text>}
-                      </View>
-                      <Text style={s.extraIcon}>{e.icon}</Text>
-                      <View style={{flex:1}}>
-                        <Text style={s.extraName}>{e.name}</Text>
-                        <Text style={s.extraDesc}>{e.description}</Text>
-                      </View>
-                      <View style={{alignItems:'flex-end'}}>
-                        <Text style={s.extraMins}>+{e.extra_minutes}m</Text>
-                        <Text style={s.extraCost}>≈ €{cost.toFixed(0)}</Text>
-                      </View>
+                      <TouchableOpacity style={s.svcFoot} onPress={()=>openTasks(t.id)}>
+                        <Text style={s.svcLink}>What's included? ›</Text>
+                      </TouchableOpacity>
                     </TouchableOpacity>
                   );
                 })}
@@ -243,10 +219,12 @@ export default function BookingScreen() {
           </View>
         )}
 
-        {/* ── STEP 1 — home details ── */}
+        {/* ── 1 · PLACE ── */}
         {step===1 && (
           <View style={s.step}>
-            <Text style={s.lbl}>How big is the place?</Text>
+            <Text style={s.stepIntro}>Tell us about the place</Text>
+
+            <Text style={s.lbl}>How big is it?</Text>
             <View style={s.sizeGrid}>
               {sizes.map(z=>(
                 <TouchableOpacity key={z.id} style={[s.sizeCard, size===z.id&&s.sizeCardOn]}
@@ -296,30 +274,125 @@ export default function BookingScreen() {
                 )}
               </>
             )}
+          </View>
+        )}
 
-            <Text style={s.lbl}>How many cleaners?</Text>
-            {maxTeam > 1
-              ? <Text style={s.teamNote}>👥 {cleaner?.name?.split(' ')[0]} can send up to {maxTeam} — the job finishes faster</Text>
-              : <Text style={s.hint}>{cleaner?.name?.split(' ')[0] || 'This cleaner'} works solo</Text>}
+        {/* ── 2 · EXTRAS ── */}
+        {step===2 && (
+          <View style={s.step}>
+            <Text style={s.stepIntro}>Anything extra?</Text>
+            <Text style={s.hint}>
+              Each one adds time to the job. Skip this step if you don't need any.
+            </Text>
+
+            {extras.map(e=>{
+              const on = chosenExtras.includes(e.id);
+              return (
+                <TouchableOpacity key={e.id} style={[s.extraRow, on&&s.extraRowOn]}
+                  onPress={()=>toggleExtra(e.id)}>
+                  <View style={[s.check, on&&s.checkOn]}>
+                    {on && <Text style={s.checkTxt}>✓</Text>}
+                  </View>
+                  <Text style={s.extraIcon}>{e.icon}</Text>
+                  <View style={{flex:1}}>
+                    <Text style={s.extraName}>{e.name}</Text>
+                    <Text style={s.extraDesc}>{e.description}</Text>
+                  </View>
+                  <Text style={s.extraMins}>+{e.extra_minutes}m</Text>
+                </TouchableOpacity>
+              );
+            })}
+
+            <Text style={s.lbl}>Cleaning materials</Text>
+            <View style={s.supplyRow}>
+              {[{k:false,l:'I provide them',d:'Nothing added'},
+                {k:true, l:'Cleaner brings them',d:'Small hourly surcharge'}].map(o=>(
+                <TouchableOpacity key={String(o.k)}
+                  style={[s.supplyCard, suppliesByCleaner===o.k&&s.supplyCardOn]}
+                  onPress={()=>setSupplies(o.k)}>
+                  <Text style={[s.supplyLbl, suppliesByCleaner===o.k&&s.supplyLblOn]}>{o.l}</Text>
+                  <Text style={s.supplyDesc}>{o.d}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* ── 3 · CLEANER — first time prices appear ── */}
+        {step===3 && (
+          <View style={s.step}>
+            <Text style={s.stepIntro}>How many cleaners?</Text>
             <View style={s.chips}>
-              {[1,2,3,4].map(n=>{
-                const blocked = n > maxTeam;
+              {[1,2,3].map(n=>{
+                const avail = cleaners.filter(c => ((c as any).teamSize ?? 1) >= n).length;
                 return (
                   <TouchableOpacity key={n}
-                    style={[s.chip, num===n&&s.chipOn, blocked&&s.chipOff]}
-                    disabled={blocked} onPress={()=>setNum(n)}>
-                    <Text style={[s.chipTxt, num===n&&s.chipTxtOn, blocked&&s.chipTxtOff]}>{n}</Text>
+                    style={[s.chip, num===n&&s.chipOn, avail===0&&s.chipOff]}
+                    disabled={avail===0} onPress={()=>setNum(n)}>
+                    <Text style={[s.chipTxt, num===n&&s.chipTxtOn, avail===0&&s.chipTxtOff]}>
+                      {n} {n===1?'cleaner':'cleaners'}
+                    </Text>
+                    {n>1 && avail>0 && (
+                      <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{avail} available</Text>
+                    )}
                   </TouchableOpacity>
                 );
               })}
             </View>
+            {num > 1 && (
+              <Text style={s.teamNote}>
+                👥 The work is shared, so the job finishes sooner.
+              </Text>
+            )}
 
-            {/* live estimate */}
+            <Text style={s.lbl}>Choose your cleaner</Text>
+            <Text style={s.hint}>
+              Each sets their own rate. The price below is for your job as configured.
+            </Text>
+
+            {capable.length === 0 ? (
+              <View style={s.emptyBox}>
+                <Text style={s.emptyIcon}>👥</Text>
+                <Text style={s.emptyTxt}>No one can send {num} cleaners</Text>
+                <Text style={s.emptySub}>Try fewer cleaners for this job.</Text>
+              </View>
+            ) : capable.map(c=>{
+              const on = pickedCleaner === c.id;
+              const q  = quoteFor(c as any);
+              return (
+                <TouchableOpacity key={c.id} style={[s.clCard, on&&s.clCardOn]}
+                  onPress={()=>setPicked(c.id)}>
+                  <View style={[s.clAv,{backgroundColor:c.color+'22'}]}>
+                    <Text style={[s.clIn,{color:c.color}]}>{c.initials}</Text>
+                  </View>
+                  <View style={{flex:1}}>
+                    <View style={s.clNameRow}>
+                      <Text style={s.clName}>{c.name}</Text>
+                      {c.verified && <View style={s.verBadge}><Text style={s.verTxt}>✓</Text></View>}
+                    </View>
+                    <Text style={s.clMeta}>
+                      ⭐ {c.rating} · €{c.rate}/hr
+                      {((c as any).teamSize ?? 1) > 1 ? ` · up to ${(c as any).teamSize}` : ''}
+                    </Text>
+                    <Text style={s.clAreas}>{c.areas.slice(0,3).join(' · ')}</Text>
+                  </View>
+                  <View style={{alignItems:'flex-end'}}>
+                    <Text style={[s.clTotal, on&&{color:C.primary}]}>€{q.total.toFixed(0)}</Text>
+                    <Text style={s.clHours}>{fmtH(q.hours)}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {/* ── 4 · WHEN ── */}
+        {step===4 && (
+          <View style={s.step}>
+            <Text style={s.stepIntro}>When should we come?</Text>
+
             <View style={s.estBox}>
               <Text style={s.estTitle}>⏱  We estimate {fmtH(hours)}</Text>
-              <Text style={s.estIntro}>
-                You'll only pay for the hours actually worked.
-              </Text>
               <View style={s.estRows}>
                 <View style={s.estRow}>
                   <Text style={s.estLbl}>{svcType?.name} · {sizeObj?.name}</Text>
@@ -339,12 +412,9 @@ export default function BookingScreen() {
                 )}
               </View>
               {est.wasRaised && (
-                <Text style={s.estNote}>
-                  Raised to the {minHours}h minimum for this service.
-                </Text>
+                <Text style={s.estNote}>Raised to the {minHours}h minimum for this service.</Text>
               )}
-              <TouchableOpacity style={s.adjustBtn}
-                onPress={()=>setManualHours(manualHours===null ? est.hours : null)}>
+              <TouchableOpacity onPress={()=>setManualHours(manualHours===null ? est.hours : null)}>
                 <Text style={s.adjustTxt}>
                   {manualHours===null ? 'Adjust the hours myself' : 'Use our estimate'}
                 </Text>
@@ -360,12 +430,7 @@ export default function BookingScreen() {
                 </View>
               )}
             </View>
-          </View>
-        )}
 
-        {/* ── STEP 2 — date & time ── */}
-        {step===2 && (
-          <View style={s.step}>
             <Text style={s.lbl}>Select date</Text>
             {DATE_LABELS.map(d=>(
               <TouchableOpacity key={d} style={[s.dateBtn, date===d&&s.dateBtnOn]} onPress={()=>setDate(d)}>
@@ -373,8 +438,8 @@ export default function BookingScreen() {
                 {date===d && <Text style={s.dateTick}>✓</Text>}
               </TouchableOpacity>
             ))}
+
             <Text style={s.lbl}>Start time</Text>
-            <Text style={s.hint}>The job should take about {fmtH(hours)}.</Text>
             <View style={s.chips}>
               {TIMES.map(ti=>(
                 <TouchableOpacity key={ti} style={[s.chip, time===ti&&s.chipOn]} onPress={()=>setTime(ti)}>
@@ -385,18 +450,18 @@ export default function BookingScreen() {
           </View>
         )}
 
-        {/* ── STEP 3 — confirm ── */}
-        {step===3 && (
+        {/* ── 5 · CONFIRM ── */}
+        {step===5 && cleaner && (
           <View style={s.step}>
             <Text style={s.confirmTitle}>Booking Summary</Text>
 
             <View style={s.cleanerCard}>
-              <View style={[s.cleanerAv, {backgroundColor:(cleaner?.color||C.primary)+'22'}]}>
-                <Text style={[s.cleanerIn, {color:cleaner?.color||C.primary}]}>{cleaner?.initials||'?'}</Text>
+              <View style={[s.cleanerAv, {backgroundColor:cleaner.color+'22'}]}>
+                <Text style={[s.cleanerIn, {color:cleaner.color}]}>{cleaner.initials}</Text>
               </View>
               <View style={{flex:1}}>
-                <Text style={s.cleanerName}>{cleanerName}</Text>
-                <Text style={s.cleanerSub}>€{baseRate}/hr base · {cleaner?.areas?.[0]||'Malta'}</Text>
+                <Text style={s.cleanerName}>{cleaner.name}</Text>
+                <Text style={s.cleanerSub}>€{baseRate}/hr base · {cleaner.areas?.[0]||'Malta'}</Text>
               </View>
             </View>
 
@@ -432,7 +497,7 @@ export default function BookingScreen() {
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Price breakdown</Text>
               {[
-                [`Base rate`, `€${baseRate.toFixed(2)}/hr`],
+                ['Base rate', `€${baseRate.toFixed(2)}/hr`],
                 [`${svcType?.name} rate  ×${multiplier}`, `€${(baseRate*multiplier).toFixed(2)}/hr`],
                 ...(suppliesByCleaner ? [['Materials surcharge', '+€2.00/hr']] : []),
                 [`${fmtH(hours)} × ${num} cleaner${num>1?'s':''}`, `€${p.exVat.toFixed(2)}`],
@@ -464,12 +529,8 @@ export default function BookingScreen() {
                 with your PIN and stops it when the work is done.
               </Text>
               <Text style={s.finalTxt}>
-                If the job finishes early you pay less. If it genuinely needs longer, your
-                cleaner asks you first — nothing is added without your approval.
-              </Text>
-              <Text style={s.finalTxt}>
-                Your card is only charged once you've seen the completed checklist and
-                approved the work.
+                You pay for the time actually worked — less if it finishes early.
+                Your card is only charged once you've approved the completed checklist.
               </Text>
             </View>
           </View>
@@ -479,13 +540,15 @@ export default function BookingScreen() {
       </ScrollView>
 
       <View style={s.footer}>
-        <View>
-          <Text style={s.footerLbl}>
-            {step < 3 ? `${fmtH(hours)} · Estimated` : `${fmtH(hours)} · Total`}
-          </Text>
-          <Text style={s.footerVal}>
-            {step < 3 ? `~€${p.clientPays.toFixed(0)}` : `€${p.clientPays.toFixed(2)}`}
-          </Text>
+        <View style={{flex:1}}>
+          {step >= 3 && cleaner ? (
+            <>
+              <Text style={s.footerLbl}>{fmtH(hours)} · Estimated</Text>
+              <Text style={s.footerVal}>€{p.clientPays.toFixed(2)}</Text>
+            </>
+          ) : (
+            <Text style={s.footerStep}>{STEPS[step]}</Text>
+          )}
         </View>
         <TouchableOpacity
           style={[s.nextBtn, (!canContinue||loading)&&s.nextBtnDis]}
@@ -493,7 +556,12 @@ export default function BookingScreen() {
           disabled={!canContinue||loading}
         >
           {loading ? <ActivityIndicator color={C.white}/> :
-            <Text style={s.nextBtnTxt}>{step<STEPS.length-1?'Continue  →':'✓  Confirm & Pay'}</Text>}
+            <Text style={s.nextBtnTxt}>
+              {!canContinue ? blockedMsg
+                : step===2 && chosenExtras.length===0 ? 'Skip  →'
+                : step<STEPS.length-1 ? 'Continue  →'
+                : '✓  Confirm & Pay'}
+            </Text>}
         </TouchableOpacity>
       </View>
 
@@ -543,28 +611,30 @@ const s = StyleSheet.create({
   back:{fontSize:16,color:C.primary,fontWeight:'600'},
   title:{fontSize:17,fontWeight:'700',color:C.dark},
   stepNum:{fontSize:13,color:C.muted},
-  progress:{flexDirection:'row',paddingHorizontal:16,marginBottom:14},
-  progressItem:{flex:1,alignItems:'center',gap:5},
-  dot:{width:28,height:28,borderRadius:14,backgroundColor:C.bgAlt,borderWidth:2,borderColor:C.border,alignItems:'center',justifyContent:'center'},
+  progress:{flexDirection:'row',paddingHorizontal:10,marginBottom:14},
+  progressItem:{flex:1,alignItems:'center',gap:4},
+  dot:{width:26,height:26,borderRadius:13,backgroundColor:C.bgAlt,borderWidth:2,borderColor:C.border,alignItems:'center',justifyContent:'center'},
   dotOn:{backgroundColor:C.primary,borderColor:C.primary},
-  dotTxt:{fontSize:11,fontWeight:'700',color:C.muted},
+  dotTxt:{fontSize:10,fontWeight:'700',color:C.muted},
   dotTxtOn:{color:C.white},
-  dotLbl:{fontSize:10,color:C.muted,fontWeight:'600'},
+  dotLbl:{fontSize:9,color:C.muted,fontWeight:'600'},
   dotLblOn:{color:C.primary},
   body:{flex:1,paddingHorizontal:20},
   step:{paddingBottom:16},
+  stepIntro:{fontSize:22,fontWeight:'800',color:C.dark,marginTop:8,marginBottom:6},
   loadingBox:{paddingVertical:30,alignItems:'center'},
-  lbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginTop:20,marginBottom:8},
-  hint:{fontSize:12,color:C.muted,marginBottom:10,lineHeight:17},
+  lbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginTop:24,marginBottom:8},
+  hint:{fontSize:13,color:C.muted,marginBottom:12,lineHeight:18},
   input:{backgroundColor:C.white,borderRadius:14,paddingHorizontal:16,paddingVertical:14,fontSize:15,color:C.text,borderWidth:1.5,borderColor:C.border},
   chips:{flexDirection:'row',flexWrap:'wrap',gap:8},
-  chip:{paddingHorizontal:14,paddingVertical:10,borderRadius:12,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border},
+  chip:{paddingHorizontal:16,paddingVertical:11,borderRadius:12,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border,alignItems:'center'},
   chipOn:{backgroundColor:C.primary,borderColor:C.primary},
   chipTxt:{fontSize:13,fontWeight:'600',color:C.muted},
   chipTxtOn:{color:C.white},
   chipOff:{backgroundColor:C.bg,borderColor:C.border,opacity:0.4},
   chipTxtOff:{color:C.muted},
-  teamNote:{fontSize:12,color:C.accent,fontWeight:'700',marginBottom:10,lineHeight:17},
+  chipSub:{fontSize:10,color:C.muted,marginTop:2},
+  teamNote:{fontSize:12,color:C.accent,fontWeight:'700',marginTop:10,lineHeight:17},
 
   svcCard:{padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10},
   svcCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
@@ -572,11 +642,7 @@ const s = StyleSheet.create({
   svcIcon:{fontSize:26},
   svcName:{fontSize:15,fontWeight:'700',color:C.dark},
   svcDesc:{fontSize:12,color:C.muted,marginTop:3,lineHeight:17},
-  svcPrice:{alignItems:'flex-end'},
-  svcRate:{fontSize:17,fontWeight:'800',color:C.primary},
-  svcUnit:{fontSize:11,color:C.muted},
-  svcFoot:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginTop:10,paddingTop:10,borderTopWidth:1,borderTopColor:C.bg},
-  svcMin:{fontSize:12,color:C.muted,fontWeight:'600'},
+  svcFoot:{marginTop:10,paddingTop:10,borderTopWidth:1,borderTopColor:C.bg},
   svcLink:{fontSize:12,color:C.primary,fontWeight:'700'},
 
   supplyRow:{flexDirection:'row',gap:10},
@@ -595,7 +661,6 @@ const s = StyleSheet.create({
   extraName:{fontSize:14,fontWeight:'700',color:C.dark},
   extraDesc:{fontSize:11,color:C.muted,marginTop:2},
   extraMins:{fontSize:13,fontWeight:'800',color:C.primary},
-  extraCost:{fontSize:10,color:C.muted,marginTop:1},
 
   sizeGrid:{flexDirection:'row',flexWrap:'wrap',gap:8},
   sizeCard:{flexBasis:'31%',flexGrow:1,alignItems:'center',paddingVertical:14,borderRadius:14,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,gap:4},
@@ -617,15 +682,31 @@ const s = StyleSheet.create({
   addrLocality:{fontSize:12,color:C.muted,marginTop:1},
   addrHint:{fontSize:12,color:C.muted,marginTop:3},
 
-  estBox:{backgroundColor:C.primaryLt,borderRadius:16,padding:16,marginTop:24,borderWidth:1,borderColor:C.border,gap:10},
+  clCard:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10,...S.sm},
+  clCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt,borderWidth:2},
+  clAv:{width:50,height:50,borderRadius:25,alignItems:'center',justifyContent:'center'},
+  clIn:{fontSize:17,fontWeight:'800'},
+  clNameRow:{flexDirection:'row',alignItems:'center',gap:8},
+  clName:{fontSize:15,fontWeight:'700',color:C.dark},
+  verBadge:{backgroundColor:C.greenLt,width:19,height:19,borderRadius:10,alignItems:'center',justifyContent:'center'},
+  verTxt:{fontSize:10,color:C.green,fontWeight:'700'},
+  clMeta:{fontSize:12,color:C.muted,marginTop:3},
+  clAreas:{fontSize:11,color:C.muted,marginTop:2},
+  clTotal:{fontSize:20,fontWeight:'800',color:C.dark},
+  clHours:{fontSize:11,color:C.muted,marginTop:1},
+
+  emptyBox:{backgroundColor:C.white,borderRadius:16,padding:28,alignItems:'center',borderWidth:1,borderColor:C.border,gap:6},
+  emptyIcon:{fontSize:38},
+  emptyTxt:{fontSize:15,fontWeight:'700',color:C.dark},
+  emptySub:{fontSize:13,color:C.muted,textAlign:'center'},
+
+  estBox:{backgroundColor:C.primaryLt,borderRadius:16,padding:16,marginTop:8,borderWidth:1,borderColor:C.border,gap:10},
   estTitle:{fontSize:17,fontWeight:'800',color:C.primary},
-  estIntro:{fontSize:12,color:C.text,lineHeight:17,marginTop:-4},
   estRows:{gap:5},
   estRow:{flexDirection:'row',justifyContent:'space-between',gap:10},
   estLbl:{fontSize:12,color:C.text,flex:1},
   estVal:{fontSize:12,color:C.text,fontWeight:'700'},
   estNote:{fontSize:11,color:C.amber,fontWeight:'700'},
-  adjustBtn:{alignSelf:'flex-start'},
   adjustTxt:{fontSize:12,color:C.primary,fontWeight:'700',textDecorationLine:'underline'},
 
   dateBtn:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingVertical:13,paddingHorizontal:16,borderRadius:12,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:8},
@@ -634,7 +715,7 @@ const s = StyleSheet.create({
   dateTxtOn:{color:C.primary},
   dateTick:{fontSize:16,color:C.primary,fontWeight:'700'},
 
-  confirmTitle:{fontSize:20,fontWeight:'800',color:C.dark,marginBottom:16,marginTop:8},
+  confirmTitle:{fontSize:22,fontWeight:'800',color:C.dark,marginBottom:16,marginTop:8},
   cleanerCard:{flexDirection:'row',alignItems:'center',gap:14,backgroundColor:C.white,borderRadius:16,padding:14,marginBottom:14,borderWidth:1,borderColor:C.border},
   cleanerAv:{width:52,height:52,borderRadius:26,alignItems:'center',justifyContent:'center'},
   cleanerIn:{fontSize:18,fontWeight:'800'},
@@ -658,15 +739,14 @@ const s = StyleSheet.create({
   finalBox:{backgroundColor:C.greenLt,borderRadius:14,padding:16,gap:8,borderWidth:1,borderColor:'#A7F3D0'},
   finalTitle:{fontSize:14,fontWeight:'800',color:C.green},
   finalTxt:{fontSize:12,color:C.text,lineHeight:18},
-  note:{backgroundColor:C.greenLt,borderRadius:12,padding:14},
-  noteTxt:{fontSize:13,color:C.green,lineHeight:20},
 
   footer:{flexDirection:'row',alignItems:'center',paddingHorizontal:20,paddingVertical:16,backgroundColor:C.white,borderTopWidth:1,borderTopColor:C.border,gap:16},
   footerLbl:{fontSize:11,color:C.muted},
   footerVal:{fontSize:20,fontWeight:'800',color:C.dark},
-  nextBtn:{flex:1,backgroundColor:C.primary,borderRadius:14,paddingVertical:16,alignItems:'center',...S.md},
+  footerStep:{fontSize:13,color:C.muted,fontWeight:'600'},
+  nextBtn:{flex:1.6,backgroundColor:C.primary,borderRadius:14,paddingVertical:16,alignItems:'center',...S.md},
   nextBtnDis:{backgroundColor:C.muted},
-  nextBtnTxt:{color:C.white,fontSize:16,fontWeight:'700'},
+  nextBtnTxt:{color:C.white,fontSize:15,fontWeight:'700'},
 
   modalWrap:{flex:1,backgroundColor:'rgba(0,0,0,0.45)',justifyContent:'flex-end'},
   modalCard:{backgroundColor:C.bg,borderTopLeftRadius:24,borderTopRightRadius:24,maxHeight:'85%',paddingBottom:16},
