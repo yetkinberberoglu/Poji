@@ -30,8 +30,10 @@ copy.forEach(f => {
 const indexPath = path.join(DIST, 'index.html');
 let html = fs.readFileSync(indexPath, 'utf8');
 
-const head = fs.readFileSync(path.join(PUBLIC, 'index-head.html'), 'utf8')
-  .split('\n').filter(l => !l.trim().startsWith('<!--')).join('\n');
+const headFile = path.join(PUBLIC, 'index-head.html');
+const head = fs.existsSync(headFile)
+  ? fs.readFileSync(headFile, 'utf8').split('\n').filter(l => !l.trim().startsWith('<!--')).join('\n')
+  : '<link rel="manifest" href="/manifest.json">\n<meta name="theme-color" content="#4F46E5">';
 
 if (!html.includes('rel="manifest"')) {
   html = html.replace('</head>', head + '\n</head>');

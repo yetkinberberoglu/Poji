@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npx expo export --platform web && node scripts/pwa.js",
+  "buildCommand": "npm run build:web",
   "outputDirectory": "dist",
   "framework": null,
   "rewrites": [
@@ -39,5 +39,6 @@
         }
       ]
     }
-  ]
+  ],
+  "installCommand": "npm install --legacy-peer-deps"
 }
