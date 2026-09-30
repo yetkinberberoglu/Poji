@@ -45,6 +45,7 @@ export default function BookingScreen() {
   const [loadingAddr, setLoadingAddr] = useState(true);
   const [num, setNum]   = useState(1);
   const [pickedCleaner, setPicked] = useState<string|null>(params.cleanerId || null);
+  const [lockedToCleaner, setLocked] = useState<boolean>(!!params.cleanerId);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [manualHours, setManualHours] = useState<number|null>(null);
@@ -64,7 +65,20 @@ export default function BookingScreen() {
   const extraMinutes   = selectedExtras.reduce((s,e)=>s+Number(e.extra_minutes),0);
 
   // cleaners who can send this many people
-  const capable = cleaners.filter(c => ((c as any).teamSize ?? 1) >= num);
+  const teamSizeOf = (c: any) => {
+    const n = Number(c?.teamSize);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  };
+
+  const allCapable = cleaners.filter(c => teamSizeOf(c) >= num);
+
+  // If the client came in from one cleaner's profile, keep them on that cleaner
+  const capable = lockedToCleaner
+    ? allCapable.filter(c => c.id === params.cleanerId)
+    : allCapable;
+
+  const lockedCleaner = cleaners.find(c => c.id === params.cleanerId) || null;
+  const lockedCapacity = lockedCleaner ? teamSizeOf(lockedCleaner) : 0;
   const cleaner = cleaners.find(c => c.id === pickedCleaner) || null;
 
   // hours depend on the chosen cleaner's minimum
@@ -114,7 +128,7 @@ export default function BookingScreen() {
 
   // drop a cleaner who can no longer cover the team size
   useEffect(() => {
-    if (pickedCleaner && !capable.find(c => c.id === pickedCleaner)) setPicked(null);
+    if (pickedCleaner && !allCapable.find(c => c.id === pickedCleaner)) setPicked(null);
   }, [num, cleaners]);
 
   const openTasks = async (typeId: string) => {
@@ -321,19 +335,39 @@ export default function BookingScreen() {
         {/* ── 3 · CLEANER — first time prices appear ── */}
         {step===3 && (
           <View style={s.step}>
+            {lockedToCleaner && lockedCleaner && (
+              <View style={s.lockBanner}>
+                <Text style={s.lockTxt}>
+                  You're booking <Text style={{fontWeight:'800'}}>{lockedCleaner.name}</Text>
+                  {lockedCapacity > 1
+                    ? ` — they can send up to ${lockedCapacity} cleaners.`
+                    : ' — they work solo.'}
+                </Text>
+                <TouchableOpacity onPress={()=>{ setLocked(false); setPicked(null); }}>
+                  <Text style={s.lockLink}>Compare other cleaners ›</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             <Text style={s.stepIntro}>How many cleaners?</Text>
             <View style={s.chips}>
               {[1,2,3].map(n=>{
-                const avail = cleaners.filter(c => ((c as any).teamSize ?? 1) >= n).length;
+                const pool  = lockedToCleaner
+                  ? (lockedCapacity >= n ? 1 : 0)
+                  : cleaners.filter(c => teamSizeOf(c) >= n).length;
+                const off = pool === 0;
                 return (
                   <TouchableOpacity key={n}
-                    style={[s.chip, num===n&&s.chipOn, avail===0&&s.chipOff]}
-                    disabled={avail===0} onPress={()=>setNum(n)}>
-                    <Text style={[s.chipTxt, num===n&&s.chipTxtOn, avail===0&&s.chipTxtOff]}>
+                    style={[s.chip, num===n&&s.chipOn, off&&s.chipOff]}
+                    disabled={off} onPress={()=>setNum(n)}>
+                    <Text style={[s.chipTxt, num===n&&s.chipTxtOn, off&&s.chipTxtOff]}>
                       {n} {n===1?'cleaner':'cleaners'}
                     </Text>
-                    {n>1 && avail>0 && (
-                      <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{avail} available</Text>
+                    {n>1 && !lockedToCleaner && pool>0 && (
+                      <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{pool} available</Text>
+                    )}
+                    {n>1 && lockedToCleaner && off && (
+                      <Text style={[s.chipSub,{color:C.muted}]}>not offered</Text>
                     )}
                   </TouchableOpacity>
                 );
@@ -345,16 +379,34 @@ export default function BookingScreen() {
               </Text>
             )}
 
-            <Text style={s.lbl}>Choose your cleaner</Text>
+            <Text style={s.lbl}>
+              {lockedToCleaner ? 'Your cleaner' : 'Choose your cleaner'}
+            </Text>
             <Text style={s.hint}>
-              Each sets their own rate. The price below is for your job as configured.
+              {lockedToCleaner
+                ? 'Tap the card to confirm this is the price for your job.'
+                : `Only cleaners who can send ${num} ${num===1?'person':'people'} are shown. Each sets their own rate.`}
             </Text>
 
             {capable.length === 0 ? (
               <View style={s.emptyBox}>
                 <Text style={s.emptyIcon}>👥</Text>
-                <Text style={s.emptyTxt}>No one can send {num} cleaners</Text>
-                <Text style={s.emptySub}>Try fewer cleaners for this job.</Text>
+                <Text style={s.emptyTxt}>
+                  {lockedToCleaner
+                    ? `${lockedCleaner?.name || 'This cleaner'} can't send ${num} people`
+                    : `No one can send ${num} cleaners`}
+                </Text>
+                <Text style={s.emptySub}>
+                  {lockedToCleaner
+                    ? 'Pick fewer cleaners, or compare other providers.'
+                    : 'Try fewer cleaners for this job.'}
+                </Text>
+                {lockedToCleaner && (
+                  <TouchableOpacity style={s.emptyBtn}
+                    onPress={()=>{ setLocked(false); setPicked(null); }}>
+                    <Text style={s.emptyBtnTxt}>Compare other cleaners</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ) : capable.map(c=>{
               const on = pickedCleaner === c.id;
@@ -371,8 +423,7 @@ export default function BookingScreen() {
                       {c.verified && <View style={s.verBadge}><Text style={s.verTxt}>✓</Text></View>}
                     </View>
                     <Text style={s.clMeta}>
-                      ⭐ {c.rating} · €{c.rate}/hr
-                      {((c as any).teamSize ?? 1) > 1 ? ` · up to ${(c as any).teamSize}` : ''}
+                      ⭐ {c.rating} · €{c.rate}/hr · {teamSizeOf(c)===1 ? 'solo' : `team of ${teamSizeOf(c)}`}
                     </Text>
                     <Text style={s.clAreas}>{c.areas.slice(0,3).join(' · ')}</Text>
                   </View>
@@ -695,6 +746,11 @@ const s = StyleSheet.create({
   clTotal:{fontSize:20,fontWeight:'800',color:C.dark},
   clHours:{fontSize:11,color:C.muted,marginTop:1},
 
+  lockBanner:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:8,marginTop:8,marginBottom:4,borderWidth:1,borderColor:C.border},
+  lockTxt:{fontSize:13,color:C.text,lineHeight:19},
+  lockLink:{fontSize:12,color:C.primary,fontWeight:'700'},
+  emptyBtn:{marginTop:10,backgroundColor:C.primary,borderRadius:12,paddingVertical:11,paddingHorizontal:20},
+  emptyBtnTxt:{color:C.white,fontSize:13,fontWeight:'700'},
   emptyBox:{backgroundColor:C.white,borderRadius:16,padding:28,alignItems:'center',borderWidth:1,borderColor:C.border,gap:6},
   emptyIcon:{fontSize:38},
   emptyTxt:{fontSize:15,fontWeight:'700',color:C.dark},
