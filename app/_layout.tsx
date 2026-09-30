@@ -53,7 +53,10 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="admin" />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="services" />
+        <Stack.Screen name="providers" />
         <Stack.Screen name="booking" />
+        <Stack.Screen name="roadside" />
         <Stack.Screen name="cleaner/[id]" />
         <Stack.Screen name="provider" />
         <Stack.Screen name="review" />

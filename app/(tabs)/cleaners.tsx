@@ -3,20 +3,27 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { C, S } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
+import { TRADES, findTrade } from '../../constants/trades';
 
 export default function CleanersScreen() {
   const { cleaners } = useApp();
   const [q, setQ] = useState('');
   const [onlyAvail, setOnlyAvail] = useState(false);
   const [needTeam, setNeedTeam]   = useState(1);
+  const [tradeFilter, setTrade]   = useState<string|null>(null);
   const list = cleaners.filter(c =>
     (c.name.toLowerCase().includes(q.toLowerCase()) || c.areas.some(a=>a.toLowerCase().includes(q.toLowerCase()))) &&
     (!onlyAvail || c.available) &&
-    (((c as any).teamSize ?? 1) >= needTeam)
+    (((c as any).teamSize ?? 1) >= needTeam) &&
+    (!tradeFilter || ((c as any).categories || []).includes(tradeFilter))
   );
+
+  // only offer filters for trades somebody actually covers
+  const activeTrades = TRADES.filter(t =>
+    cleaners.some(c => ((c as any).categories || []).includes(t.id)));
   return (
     <ScrollView style={s.wrap} showsVerticalScrollIndicator={false}>
-      <Text style={s.heading}>Find a Cleaner</Text>
+      <Text style={s.heading}>Find a provider</Text>
       <View style={s.searchRow}>
         <View style={s.searchBox}>
           <Text>🔍  </Text>
@@ -26,6 +33,24 @@ export default function CleanersScreen() {
           <Text style={[s.filterTxt, onlyAvail&&s.filterTxtOn]}>Available</Text>
         </TouchableOpacity>
       </View>
+      {activeTrades.length > 1 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.tradeStrip} style={{maxHeight:46,marginBottom:12}}>
+          <TouchableOpacity style={[s.tradeChip, !tradeFilter&&s.tradeChipOn]}
+            onPress={()=>setTrade(null)}>
+            <Text style={[s.tradeChipTxt, !tradeFilter&&s.tradeChipTxtOn]}>All</Text>
+          </TouchableOpacity>
+          {activeTrades.map(t=>(
+            <TouchableOpacity key={t.id} style={[s.tradeChip, tradeFilter===t.id&&s.tradeChipOn]}
+              onPress={()=>setTrade(t.id)}>
+              <Text style={[s.tradeChipTxt, tradeFilter===t.id&&s.tradeChipTxtOn]}>
+                {t.icon}  {t.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
       <View style={s.teamRow}>
         <Text style={s.teamLbl}>Team size</Text>
         <View style={s.teamChips}>
@@ -40,7 +65,7 @@ export default function CleanersScreen() {
         </View>
       </View>
 
-      <Text style={s.count}>{list.length} cleaners found</Text>
+      <Text style={s.count}>{list.length} provider{list.length===1?'':'s'} found</Text>
       {list.map(c=>(
         <TouchableOpacity key={c.id} style={s.card} onPress={()=>router.push(`/cleaner/${c.id}`)}>
           <View style={s.cardTop}>
@@ -106,6 +131,11 @@ const s = StyleSheet.create({
   teamChipTxt:{fontSize:12,fontWeight:'700',color:C.muted},
   teamChipTxtOn:{color:C.white},
   teamNote:{fontSize:11,color:C.accent,fontWeight:'700',marginTop:3},
+  tradeStrip:{gap:8,paddingHorizontal:20},
+  tradeChip:{paddingHorizontal:14,paddingVertical:9,borderRadius:20,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border},
+  tradeChipOn:{backgroundColor:C.primary,borderColor:C.primary},
+  tradeChipTxt:{fontSize:12,fontWeight:'700',color:C.muted},
+  tradeChipTxtOn:{color:C.white},
   count:{fontSize:13,color:C.muted,paddingHorizontal:20,marginBottom:12},
   card:{marginHorizontal:20,marginBottom:14,backgroundColor:C.white,borderRadius:20,padding:16,...S.sm,borderWidth:1,borderColor:C.border},
   cardTop:{flexDirection:'row',gap:12,marginBottom:12},

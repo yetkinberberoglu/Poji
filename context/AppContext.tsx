@@ -31,6 +31,13 @@ export interface Booking {
   hourlyRate?: number | null;
   serviceMultiplier?: number | null;
   suppliesBy?: string | null;
+  pricingModel?: string | null;
+  calloutFee?: number | null;
+  isUrgent?: boolean | null;
+  lat?: number | null;
+  lng?: number | null;
+  locationNote?: string | null;
+  vehicleInfo?: string | null;
 }
 
 export type Cleaner = {
@@ -41,16 +48,22 @@ export type Cleaner = {
   bio: string; completionRate: number;
   minHours?: number; bringsOwnSupplies?: boolean;
   teamType?: string; teamSize?: number;
+  categories?: string[]; acceptsUrgent?: boolean; serviceRadiusKm?: number;
 };
 
 interface Ctx {
   bookings: Booking[];
   cleaners: Cleaner[];
+  providers: Cleaner[];
   addBooking: (
     b: Omit<Booking,'id'|'createdAt'>,
     meta?: { multiplier?: number; suppliesByCleaner?: boolean; hourlyRate?: number;
              extraIds?: string[]; propertySize?: string; estimatedMinutes?: number;
-             extrasForChecklist?: any[] }
+             extrasForChecklist?: any[];
+             pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
+             lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
+             locationNote?: string|null; vehicleInfo?: string|null;
+             releasedToPool?: boolean }
   ) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   markArrived: (id: string) => Promise<string>;
@@ -66,6 +79,7 @@ interface Ctx {
   userRole: string;
   userName: string;
   userId: string;
+  myCategories: string[];
 }
 
 const AppContext = createContext<Ctx>({} as Ctx);
@@ -76,6 +90,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [userRole,  setUserRole]  = useState('client');
   const [userName,  setUserName]  = useState('');
   const [userId,    setUserId]    = useState('');
+  const [myCategories, setMyCats] = useState<string[]>(['cleaning']);
 
   const loadCleaners = async () => {
     const { data, error } = await supabase
@@ -112,6 +127,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         bringsOwnSupplies: !!c.brings_own_supplies,
         teamType: c.team_type || 'solo',
         teamSize: Number(c.team_size) || 1,
+        categories: (c.categories && c.categories.length) ? c.categories : ['cleaning'],
+        acceptsUrgent: !!c.accepts_urgent,
+        serviceRadiusKm: Number(c.service_radius_km) || 15,
       } as any;
     });
 
@@ -127,6 +145,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (data) {
       setUserRole(data.role || 'client');
       setUserName(data.full_name || user.email || '');
+    }
+
+    if (data?.role === 'cleaner') {
+      const { data: prof } = await supabase
+        .from('cleaner_profiles').select('categories').eq('id', user.id).maybeSingle();
+      if (prof?.categories?.length) setMyCats(prof.categories);
     }
   };
 
@@ -185,6 +209,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         hourlyRate: b.hourly_rate,
         serviceMultiplier: b.service_multiplier,
         suppliesBy: b.supplies_by,
+        pricingModel: b.pricing_model,
+        calloutFee: b.callout_fee,
+        isUrgent: b.is_urgent,
+        lat: b.lat,
+        lng: b.lng,
+        locationNote: b.location_note,
+        vehicleInfo: b.vehicle_info,
       })));
     }
   };
@@ -215,7 +246,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     b: Omit<Booking,'id'|'createdAt'>,
     meta?: { multiplier?: number; suppliesByCleaner?: boolean; hourlyRate?: number;
              extraIds?: string[]; propertySize?: string; estimatedMinutes?: number;
-             extrasForChecklist?: any[] }
+             extrasForChecklist?: any[];
+             pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
+             lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
+             locationNote?: string|null; vehicleInfo?: string|null;
+             releasedToPool?: boolean }
   ) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
@@ -223,7 +258,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const exVat = b.total / 1.029 / 1.18;
     const { data, error } = await supabase.from('bookings').insert({
       client_id: user.id,
-      cleaner_id: b.cleanerId,
+      cleaner_id: b.cleanerId || null,
       address: b.address,
       date: b.date,
       start_time: b.time,
@@ -245,9 +280,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       hourly_rate: meta?.hourlyRate ?? 15,
       property_size: meta?.propertySize ?? '1bed',
       estimated_minutes: meta?.estimatedMinutes ?? null,
-      preferred_cleaner_id: b.cleanerId,
-      preferred_until: new Date(Date.now() + 5*60*1000).toISOString(),
-      released_to_pool: false,
+      pricing_model: meta?.pricingModel ?? 'hourly',
+      callout_fee: meta?.calloutFee ?? 0,
+      is_urgent: meta?.isUrgent ?? false,
+      lat: meta?.lat ?? null,
+      lng: meta?.lng ?? null,
+      location_accuracy: meta?.locationAccuracy ?? null,
+      location_note: meta?.locationNote ?? null,
+      vehicle_info: meta?.vehicleInfo ?? null,
+      preferred_cleaner_id: b.cleanerId || null,
+      preferred_until: meta?.releasedToPool ? null : new Date(Date.now() + 5*60*1000).toISOString(),
+      released_to_pool: meta?.releasedToPool ?? false,
     }).select().single();
 
     if (error) { console.log('addBooking error:', error.message); throw error; }
@@ -265,6 +308,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       seedChecklist(data.id, b.serviceType)
         .then(() => seedExtraTasks(data.id, meta?.extrasForChecklist || []));
 
+      // Roadside and pool jobs: alert every approved provider at once
+      if (meta?.releasedToPool) {
+        supabase.from('cleaner_profiles').select('id')
+          .eq('verification_status','approved')
+          .then(({ data }) => {
+            (data || []).forEach(c => notify(c.id, 'job_in_pool', {
+              address: b.address, date: b.date, time: b.time, hours: b.hours,
+              earnings: (b.total / 1.029 / 1.18 * 0.80),
+            }, data.id));
+          });
+      } else
       // Tell the preferred cleaner they have a 5-minute priority window
       notify(b.cleanerId, 'new_job_offer', {
         address: b.address, date: b.date, time: b.time,
@@ -480,11 +534,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AppContext.Provider value={{
-      bookings, cleaners, addBooking, updateStatus,
+      bookings, cleaners, providers: cleaners, addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
       releaseToPool, reassignCleaner, acceptJob,
       loadBookings, getCleanerById,
-      userRole, userName, userId,
+      userRole, userName, userId, myCategories,
     }}>
       {children}
     </AppContext.Provider>

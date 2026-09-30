@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
+import { CATEGORIES, tradesIn } from '../constants/trades';
 
 const STEPS = ['Identity', 'Documents', 'Work', 'Service', 'Payment'];
 
@@ -44,6 +45,8 @@ export default function Onboarding() {
     emergency_name:'', emergency_phone:'',
     work_authorization:'eu_citizen', work_permit_url:'', work_permit_expiry:'',
     team_type:'solo', team_size:1, company_name:'', vat_number:'', company_reg_number:'',
+    categories:['cleaning'] as string[],
+    accepts_urgent:false, service_radius_km:'15',
     hourly_rate:'15', min_hours:'3', service_areas:[] as string[],
     brings_own_supplies:false, bio:'',
     iban:'', bank_name:'', account_holder:'',
@@ -113,6 +116,7 @@ export default function Onboarding() {
       if (f.team_type==='company' && !f.company_name)                 miss.push('Company name');
     }
     if (s===3) {
+      if (!f.categories || f.categories.length === 0) miss.push('At least one trade');
       if (!f.hourly_rate || Number(f.hourly_rate) <= 0) miss.push('Hourly rate');
       if (!f.min_hours   || Number(f.min_hours)   <= 0) miss.push('Minimum hours');
       if (f.service_areas.length===0)                   miss.push('At least one service area');
@@ -141,6 +145,9 @@ export default function Onboarding() {
       team_type:f.team_type,
       team_size:f.team_type==='solo'?1:(f.team_type==='duo'?2:Number(f.team_size)||1),
       company_name:f.company_name, vat_number:f.vat_number, company_reg_number:f.company_reg_number,
+      categories: f.categories && f.categories.length ? f.categories : ['cleaning'],
+      accepts_urgent: !!f.accepts_urgent,
+      service_radius_km: Number(f.service_radius_km) || 15,
       hourly_rate:Number(f.hourly_rate)||15, min_hours:Number(f.min_hours)||3,
       service_areas:f.service_areas, brings_own_supplies:f.brings_own_supplies, bio:f.bio,
       iban:f.iban, bank_name:f.bank_name, account_holder:f.account_holder,
@@ -181,6 +188,9 @@ export default function Onboarding() {
       team_type:f.team_type,
       team_size:f.team_type==='solo'?1:(f.team_type==='duo'?2:Number(f.team_size)||1),
       company_name:f.company_name, vat_number:f.vat_number, company_reg_number:f.company_reg_number,
+      categories: f.categories && f.categories.length ? f.categories : ['cleaning'],
+      accepts_urgent: !!f.accepts_urgent,
+      service_radius_km: Number(f.service_radius_km) || 15,
       hourly_rate:Number(f.hourly_rate), min_hours:Number(f.min_hours),
       service_areas:f.service_areas, brings_own_supplies:f.brings_own_supplies, bio:f.bio,
       iban:f.iban, bank_name:f.bank_name, account_holder:f.account_holder,
@@ -443,8 +453,91 @@ export default function Onboarding() {
         {step===3 && (
           <View style={st.step}>
             <Text style={st.sectionHint}>
-              You set your own rate. Poji keeps a flat 20% commission on every job.
+              Tell us what you do and what you charge. Poji keeps a flat 20% commission.
             </Text>
+
+            <Text style={st.lbl}>What work do you take?</Text>
+            <Text style={st.uploadHint}>
+              Pick everything you're qualified for — a company can cover many trades.
+              You can change this later.
+            </Text>
+
+            {(f.categories||[]).length > 0 && (
+              <View style={st.pickedBar}>
+                <Text style={st.pickedTxt}>
+                  {(f.categories||[]).length} trade{(f.categories||[]).length>1?'s':''} selected
+                </Text>
+                <TouchableOpacity onPress={()=>set('categories', [])}>
+                  <Text style={st.pickedClear}>Clear all</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {CATEGORIES.map(cat=>{
+              const items = tradesIn(cat.id);
+              const chosen = items.filter(t=>(f.categories||[]).includes(t.id)).length;
+              return (
+                <View key={cat.id} style={st.tradeGroup}>
+                  <View style={st.tradeGroupHead}>
+                    <Text style={st.tradeGroupTitle}>{cat.icon}  {cat.name}</Text>
+                    {chosen > 0 && (
+                      <View style={st.tradeGroupCount}>
+                        <Text style={st.tradeGroupCountTxt}>{chosen}</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={st.tradeWrap}>
+                    {items.map(t=>{
+                      const on = (f.categories||[]).includes(t.id);
+                      return (
+                        <TouchableOpacity key={t.id} style={[st.tradePill, on&&st.tradePillOn]}
+                          onPress={()=>set('categories', on
+                            ? f.categories.filter((x:string)=>x!==t.id)
+                            : [...(f.categories||[]), t.id])}>
+                          <Text style={[st.tradePillTxt, on&&st.tradePillTxtOn]}>
+                            {on ? '✓ ' : ''}{t.icon}  {t.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              );
+            })}
+
+            {tradesIn('vehicle').some(t=>(f.categories||[]).includes(t.id)) && (
+              <View style={st.roadBox}>
+                <Text style={st.roadTitle}>🛞  Roadside work</Text>
+                <Text style={st.roadTxt}>
+                  Callout jobs are paid at a fixed price per job, not by the hour.
+                  You see the price before accepting.
+                </Text>
+
+                <TouchableOpacity style={[st.urgentRow, f.accepts_urgent&&st.urgentRowOn]}
+                  onPress={()=>set('accepts_urgent', !f.accepts_urgent)}>
+                  <View style={[st.tradeCheck, f.accepts_urgent&&st.tradeCheckOn]}>
+                    {f.accepts_urgent && <Text style={st.tradeCheckTxt}>✓</Text>}
+                  </View>
+                  <View style={{flex:1}}>
+                    <Text style={st.tradeName}>I take emergency callouts</Text>
+                    <Text style={st.tradeDesc}>Drop everything and go. These pay 25% more.</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <Text style={st.lbl}>How far will you travel?</Text>
+                <View style={st.chips}>
+                  {[5,10,15,25,40].map(km=>(
+                    <TouchableOpacity key={km}
+                      style={[st.chip, Number(f.service_radius_km)===km&&st.chipOn]}
+                      onPress={()=>set('service_radius_km', km)}>
+                      <Text style={[st.chipTxt, Number(f.service_radius_km)===km&&st.chipTxtOn]}>
+                        {km} km
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
 
             <Text style={st.lbl}>Your hourly rate (EUR)</Text>
             <TextInput style={st.inputBig} value={String(f.hourly_rate)}
@@ -528,6 +621,7 @@ export default function Onboarding() {
               {[
                 ['Name',  f.first_name + ' ' + f.last_name],
                 ['Type',  TEAM_TYPES.find(t=>t.k===f.team_type)?.label || ''],
+                ['Trades', `${(f.categories||[]).length} selected`],
                 ['Rate',  '€' + f.hourly_rate + '/hr · min ' + f.min_hours + 'h'],
                 ['Areas', f.service_areas.slice(0,3).join(', ') + (f.service_areas.length>3 ? ' +' + (f.service_areas.length-3) : '')],
               ].map(([k,v])=>(
@@ -598,6 +692,19 @@ const st = StyleSheet.create({
   inputBig:{backgroundColor:C.white,borderRadius:14,paddingHorizontal:16,paddingVertical:18,fontSize:26,fontWeight:'800',color:C.dark,borderWidth:2,borderColor:C.primary,textAlign:'center'},
   row2:{flexDirection:'row',gap:12},
   chips:{flexDirection:'row',flexWrap:'wrap',gap:8},
+  tradeRow:{flexDirection:'row',alignItems:'center',gap:12,padding:13,borderRadius:14,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white},
+  tradeRowOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
+  tradeCheck:{width:22,height:22,borderRadius:7,borderWidth:2,borderColor:C.border,alignItems:'center',justifyContent:'center'},
+  tradeCheckOn:{backgroundColor:C.primary,borderColor:C.primary},
+  tradeCheckTxt:{color:C.white,fontSize:13,fontWeight:'800'},
+  tradeIcon:{fontSize:22},
+  tradeName:{fontSize:14,fontWeight:'700',color:C.dark},
+  tradeDesc:{fontSize:11,color:C.muted,marginTop:2},
+  roadBox:{backgroundColor:C.amberLt,borderRadius:16,padding:16,marginTop:16,gap:10,borderWidth:1,borderColor:'#FDE68A'},
+  roadTitle:{fontSize:14,fontWeight:'800',color:C.amber},
+  roadTxt:{fontSize:12,color:C.text,lineHeight:18},
+  urgentRow:{flexDirection:'row',alignItems:'center',gap:12,padding:13,borderRadius:12,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white},
+  urgentRowOn:{borderColor:C.amber,backgroundColor:C.white},
   chip:{paddingHorizontal:14,paddingVertical:10,borderRadius:12,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border},
   chipOn:{backgroundColor:C.primary,borderColor:C.primary},
   chipTxt:{fontSize:13,fontWeight:'600',color:C.muted},

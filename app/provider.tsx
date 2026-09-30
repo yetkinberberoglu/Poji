@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useState, useEffect } from 'react';
 import { fmtDuration } from '../lib/services';
+import { directionsLink, mapsLink } from '../lib/location';
 
 
 const prettyDate = (d?: string) => {
@@ -33,7 +34,7 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
 };
 
 export default function ProviderScreen() {
-  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, loadBookings, userName, userId } = useApp();
+  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, loadBookings, userName, userId, myCategories } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy]             = useState<string|null>(null);
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
@@ -79,7 +80,8 @@ export default function ProviderScreen() {
 
   useEffect(() => {
     bookings
-      .filter(b => ['in_progress','awaiting_confirmation'].includes(b.status))
+      .filter(b => ['in_progress','awaiting_confirmation'].includes(b.status)
+                && b.pricingModel !== 'fixed')
       .forEach(b => { if (!checklist[b.id]) loadChecklist(b.id); });
   }, [bookings]);
 
@@ -120,7 +122,23 @@ export default function ProviderScreen() {
 
   const doFinish = async (id: string) => { setBusy(id); await finishJob(id); setBusy(null); };
 
-  const active = bookings.filter(b => !['cancelled','completed','disputed'].includes(b.status));
+  const VEHICLE_TRADES = ['tyre','battery','mechanic','towing','fuel','carlock','carvalet','vrt'];
+
+  const inMyTrade = (b: any) => {
+    // anything already assigned to me always shows
+    if (b.cleanerId === userId) return true;
+    // roadside jobs carry the service id directly
+    if (b.pricingModel === 'fixed') {
+      return myCategories.some((c:string) =>
+        VEHICLE_TRADES.includes(c) || c === b.serviceType);
+    }
+    return myCategories.includes('cleaning');
+  };
+
+  const active = bookings
+    .filter(b => !['cancelled','completed','disputed'].includes(b.status))
+    .filter(inMyTrade)
+    .sort((a,b) => (b.isUrgent ? 1 : 0) - (a.isUrgent ? 1 : 0));
   const done   = bookings.filter(b => ['cancelled','completed','disputed'].includes(b.status));
   const earned = done.filter(b => b.status==='completed')
     .reduce((s,b) => s + Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)), 0);
@@ -178,6 +196,50 @@ export default function ProviderScreen() {
                 ))}
               </View>
 
+              {b.pricingModel === 'fixed' && (
+                <View style={s0.roadBox}>
+                  <View style={s0.roadHead}>
+                    <Text style={s0.roadTitle}>
+                      {b.isUrgent ? '🚨  Emergency callout' : '🛞  Roadside job'}
+                    </Text>
+                    <View style={s0.fixedTag}>
+                      <Text style={s0.fixedTagTxt}>Fixed price</Text>
+                    </View>
+                  </View>
+
+                  {!!b.vehicleInfo && (
+                    <View style={s0.roadRow}>
+                      <Text style={s0.roadKey}>Vehicle</Text>
+                      <Text style={s0.roadVal}>{b.vehicleInfo}</Text>
+                    </View>
+                  )}
+                  {!!b.locationNote && (
+                    <View style={s0.roadRow}>
+                      <Text style={s0.roadKey}>Finding them</Text>
+                      <Text style={s0.roadVal}>{b.locationNote}</Text>
+                    </View>
+                  )}
+
+                  {b.lat != null && b.lng != null && (
+                    <View style={s0.gpsBox}>
+                      <Text style={s0.gpsTxt}>
+                        📍  GPS shared — {Number(b.lat).toFixed(5)}, {Number(b.lng).toFixed(5)}
+                      </Text>
+                      <View style={s0.mapButtons}>
+                        <TouchableOpacity style={s0.mapBtn}
+                          onPress={()=>Linking.openURL(mapsLink({lat:Number(b.lat), lng:Number(b.lng)}))}>
+                          <Text style={s0.mapBtnTxt}>🗺  View pin</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[s0.mapBtn,s0.mapBtnPrimary]}
+                          onPress={()=>Linking.openURL(directionsLink({lat:Number(b.lat), lng:Number(b.lng)}))}>
+                          <Text style={[s0.mapBtnTxt,{color:C.white}]}>🚗  Navigate</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
               {b.numCleaners > 1 && (
                 <View style={s0.teamBanner}>
                   <Text style={s0.teamBannerTxt}>
@@ -191,18 +253,22 @@ export default function ProviderScreen() {
                   <Text style={s0.addressIcon}>📍</Text>
                   <Text style={s0.addressTxt}>{b.address}</Text>
                 </View>
-                <View style={s0.mapButtons}>
-                  <TouchableOpacity style={s0.mapBtn} onPress={()=>openMap(b.address)}>
-                    <Text style={s0.mapBtnTxt}>🗺  View Map</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[s0.mapBtn,s0.mapBtnPrimary]} onPress={()=>openDirections(b.address)}>
-                    <Text style={[s0.mapBtnTxt,{color:C.white}]}>🚗  Directions</Text>
-                  </TouchableOpacity>
-                </View>
+                {b.pricingModel !== 'fixed' && (
+                  <View style={s0.mapButtons}>
+                    <TouchableOpacity style={s0.mapBtn} onPress={()=>openMap(b.address)}>
+                      <Text style={s0.mapBtnTxt}>🗺  View Map</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[s0.mapBtn,s0.mapBtnPrimary]} onPress={()=>openDirections(b.address)}>
+                      <Text style={[s0.mapBtnTxt,{color:C.white}]}>🚗  Directions</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
 
               <View style={s0.earningsRow}>
-                <Text style={s0.earningsKey}>Your earnings</Text>
+                <Text style={s0.earningsKey}>
+                  {b.pricingModel === 'fixed' ? 'You get (fixed)' : 'Your earnings'}
+                </Text>
                 <Text style={s0.earningsAmt}>€{pay}</Text>
               </View>
 
@@ -242,10 +308,17 @@ export default function ProviderScreen() {
               )}
 
               {b.status==='en_route' && (
-                <TouchableOpacity style={[s0.amberBtn,isBusy&&s0.dis]} disabled={isBusy}
-                  onPress={()=>doArrive(b.id)}>
-                  <Text style={s0.whiteBtnTxt}>{isBusy?'…':'📍  I Have Arrived'}</Text>
-                </TouchableOpacity>
+                b.pricingModel === 'fixed' ? (
+                  <TouchableOpacity style={[s0.primaryBtn,isBusy&&s0.dis]} disabled={isBusy}
+                    onPress={()=>doStatus(b.id,'in_progress')}>
+                    <Text style={s0.whiteBtnTxt}>{isBusy?'…':'📍  Arrived — start work'}</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity style={[s0.amberBtn,isBusy&&s0.dis]} disabled={isBusy}
+                    onPress={()=>doArrive(b.id)}>
+                    <Text style={s0.whiteBtnTxt}>{isBusy?'…':'📍  I Have Arrived'}</Text>
+                  </TouchableOpacity>
+                )
               )}
 
               {b.status==='arrived' && (
@@ -269,7 +342,25 @@ export default function ProviderScreen() {
                 </View>
               )}
 
-              {b.status==='in_progress' && (() => {
+              {b.status==='in_progress' && b.pricingModel === 'fixed' && (
+                <>
+                  <View style={s0.fixedWorking}>
+                    <Text style={s0.fixedWorkingTxt}>
+                      🔧  Fixed-price job — no timer running. Finish the work and mark it done.
+                    </Text>
+                    <Text style={s0.fixedWorkingSub}>
+                      If it needs parts beyond the standard fix, agree that with the client
+                      separately before carrying on.
+                    </Text>
+                  </View>
+                  <TouchableOpacity style={[s0.primaryBtn,isBusy&&s0.dis]} disabled={isBusy}
+                    onPress={()=>doFinish(b.id)}>
+                    <Text style={s0.whiteBtnTxt}>{isBusy?'…':'✅  Work complete'}</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {b.status==='in_progress' && b.pricingModel !== 'fixed' && (() => {
                 const prog = listProgress(b.id);
                 const allDone = prog.total > 0 && prog.done === prog.total;
                 const items = checklist[b.id] || [];
@@ -351,7 +442,17 @@ export default function ProviderScreen() {
 
               {b.status==='awaiting_confirmation' && (
                 <View style={s0.waitBox}>
-                  {b.actualMinutes != null && (
+                  {b.pricingModel === 'fixed' && (
+                    <View style={s0.settleBox}>
+                      <View style={s0.settleRow}>
+                        <Text style={s0.settleLbl}>Agreed price</Text>
+                        <Text style={s0.settleBig}>
+                          €{(Number(b.total)/1.029/1.18*0.80).toFixed(2)}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                  {b.pricingModel !== 'fixed' && b.actualMinutes != null && (
                     <View style={s0.settleBox}>
                       <View style={s0.settleRow}>
                         <Text style={s0.settleLbl}>Time worked</Text>
@@ -447,6 +548,19 @@ const s0 = StyleSheet.create({
   infoItem:{flexDirection:'row',alignItems:'center',gap:6,backgroundColor:C.bg,paddingHorizontal:10,paddingVertical:6,borderRadius:10},
   infoIcon:{fontSize:14},
   infoTxt:{fontSize:13,color:C.text,fontWeight:'600'},
+  roadBox:{backgroundColor:C.amberLt,borderRadius:14,padding:14,gap:10,borderWidth:1,borderColor:'#FDE68A'},
+  roadHead:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},
+  roadTitle:{fontSize:14,fontWeight:'800',color:C.amber},
+  fixedTag:{backgroundColor:C.white,paddingHorizontal:9,paddingVertical:3,borderRadius:10,borderWidth:1,borderColor:'#FDE68A'},
+  fixedTagTxt:{fontSize:10,fontWeight:'800',color:C.amber},
+  roadRow:{flexDirection:'row',gap:10},
+  roadKey:{fontSize:12,color:C.muted,fontWeight:'700',width:90},
+  roadVal:{fontSize:12,color:C.text,flex:1,lineHeight:17},
+  gpsBox:{backgroundColor:C.white,borderRadius:12,padding:12,gap:10,borderWidth:1,borderColor:C.border},
+  gpsTxt:{fontSize:12,color:C.text,fontWeight:'600'},
+  fixedWorking:{backgroundColor:C.amberLt,borderRadius:12,padding:14,gap:6,borderWidth:1,borderColor:'#FDE68A'},
+  fixedWorkingTxt:{fontSize:13,color:C.amber,fontWeight:'700',lineHeight:18},
+  fixedWorkingSub:{fontSize:11,color:C.text,lineHeight:16},
   teamBanner:{backgroundColor:'#F3E8FF',borderRadius:12,padding:12,borderWidth:1,borderColor:'#E9D5FF'},
   teamBannerTxt:{fontSize:13,color:C.accent,fontWeight:'700'},
   addressCard:{backgroundColor:C.bg,borderRadius:14,padding:12,gap:10},

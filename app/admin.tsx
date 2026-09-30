@@ -44,7 +44,7 @@ const prettyDate = (d?: string) => {
   return dt.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
 };
 
-const money = (n:number) = '€' + (Number(n)||0).toLocaleString('en-MT',{minimumFractionDigits:2,maximumFractionDigits:2});
+const money = (n:number) => '€' + (Number(n)||0).toLocaleString('en-MT',{minimumFractionDigits:2,maximumFractionDigits:2});
 const dayjs = (d:string) => d ? new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
 const daysAgo = (d:string) => d ? Math.floor((Date.now()-new Date(d).getTime())/86400000) : 9999;
 

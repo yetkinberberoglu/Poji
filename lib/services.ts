@@ -4,6 +4,12 @@ export type ServiceType = {
   id: string; name: string; description: string;
   multiplier: number; min_hours: number; base_minutes: number;
   icon: string; sort_order: number;
+  category?: string;
+  pricing_model?: 'hourly' | 'fixed';
+  fixed_price?: number | null;
+  callout_fee?: number | null;
+  typical_minutes?: number | null;
+  needs_location?: boolean;
 };
 
 export type ServiceExtra = {
@@ -19,9 +25,10 @@ export type ServiceTask = {
   id: string; service_type_id: string; area: string; task: string; sort_order: number;
 };
 
-export async function loadServiceTypes(): Promise<ServiceType[]> {
-  const { data, error } = await supabase
-    .from('service_types').select('*').eq('active', true).order('sort_order');
+export async function loadServiceTypes(category?: string): Promise<ServiceType[]> {
+  let q = supabase.from('service_types').select('*').eq('active', true);
+  if (category) q = q.eq('category', category);
+  const { data, error } = await q.order('sort_order');
   if (error) { console.log('loadServiceTypes:', error.message); return []; }
   return data || [];
 }
@@ -184,3 +191,51 @@ export const fmtDuration = (mins: number) => {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 };
+
+
+/**
+ * Callout jobs — roadside and similar. One agreed price plus a callout fee.
+ * No timer, no hourly maths: the client knows the number before anyone sets off.
+ */
+export function fixedQuote(opts: {
+  fixedPrice: number;
+  calloutFee: number;
+  urgent?: boolean;
+}) {
+  const URGENT_SURCHARGE = 0.25;   // 25% for "come now"
+  const VAT_RATE   = 0.18;
+  const COMMISSION = 0.20;
+
+  const base    = Number(opts.fixedPrice) + Number(opts.calloutFee || 0);
+  const urgent  = opts.urgent ? +(base * URGENT_SURCHARGE).toFixed(2) : 0;
+  const exVat   = +(base + urgent).toFixed(2);
+  const vat     = +(exVat * VAT_RATE).toFixed(2);
+  const service = +(exVat + vat).toFixed(2);
+  const stripe  = +(service * 0.029 + 0.30).toFixed(2);
+
+  return {
+    jobPrice:   Number(opts.fixedPrice),
+    calloutFee: Number(opts.calloutFee || 0),
+    urgentFee:  urgent,
+    exVat,
+    vat,
+    stripeFee:  stripe,
+    clientPays: +(service + stripe).toFixed(2),
+    providerGets: +(exVat * (1 - COMMISSION)).toFixed(2),
+    platform:     +(exVat * COMMISSION).toFixed(2),
+  };
+}
+
+/** Straight-line distance in km — good enough to show how far a provider is */
+export function distanceKm(
+  a: { lat:number; lng:number },
+  b: { lat:number; lng:number }
+) {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const la1  = a.lat * Math.PI / 180;
+  const la2  = b.lat * Math.PI / 180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
+  return +(2 * R * Math.asin(Math.sqrt(h))).toFixed(1);
+}
