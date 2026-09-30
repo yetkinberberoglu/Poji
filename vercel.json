@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npx expo export --platform web",
+  "buildCommand": "node ./node_modules/expo/bin/cli export --platform web",
   "outputDirectory": "dist",
   "framework": null,
   "rewrites": [
