@@ -6,6 +6,19 @@ import { supabase } from '../lib/supabase';
 import { useState, useEffect } from 'react';
 import { fmtDuration } from '../lib/services';
 
+
+const prettyDate = (d?: string) => {
+  if (!d) return '—';
+  const dt = new Date(d + 'T00:00:00');
+  if (isNaN(dt.getTime())) return d;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((dt.getTime() - today.getTime()) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  return dt.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
+};
+
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Offered to You',  color:C.amber,  bg:C.amberLt,   icon:'🔔'},
   pending_pool:          {label:'Open to All',     color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
@@ -157,7 +170,7 @@ export default function ProviderScreen() {
 
             <View style={s0.cardBody}>
               <View style={s0.infoGrid}>
-                {[['📅',b.date],['🕐',b.time],['⏱',`${b.hours}h`],
+                {[['📅',prettyDate(b.date)],['🕐',b.time],['⏱',`${b.hours}h`],
                   ['🧹',(b.serviceType||'standard').replace('_',' ')]].map(([i,v])=>(
                   <View key={String(v)} style={s0.infoItem}>
                     <Text style={s0.infoIcon}>{i}</Text><Text style={s0.infoTxt}>{v}</Text>
@@ -387,7 +400,7 @@ export default function ProviderScreen() {
                     </View>
                   )}
                   <View style={s0.earningsRow}>
-                    <Text style={s0.earningsKey}>{b.date} · {b.hours}h</Text>
+                    <Text style={s0.earningsKey}>{prettyDate(b.date)} · {b.hours}h</Text>
                     <Text style={s0.earningsAmt}>
                       {b.status==='completed'
                         ? `€${Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)).toFixed(2)}`

@@ -31,7 +31,20 @@ const BK_STATUS: Record<string,{label:string;color:string;bg:string}> = {
   cancelled:             {label:'Cancelled',     color:C.red,    bg:C.redLt},
 };
 
-const money = (n:number) => '€' + (Number(n)||0).toLocaleString('en-MT',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+const prettyDate = (d?: string) => {
+  if (!d) return '—';
+  const dt = new Date(d + 'T00:00:00');
+  if (isNaN(dt.getTime())) return d;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((dt.getTime() - today.getTime()) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  return dt.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
+};
+
+const money = (n:number) = '€' + (Number(n)||0).toLocaleString('en-MT',{minimumFractionDigits:2,maximumFractionDigits:2});
 const dayjs = (d:string) => d ? new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
 const daysAgo = (d:string) => d ? Math.floor((Date.now()-new Date(d).getTime())/86400000) : 9999;
 
@@ -537,7 +550,7 @@ export default function Admin() {
                   <View style={{flex:1}}>
                     <Text style={st.cardTitle}>{b.address}</Text>
                     <Text style={st.cardSub}>
-                      {b.date} · {b.start_time} · {b.hours}h × {b.num_cleaners}
+                      {prettyDate(b.date)} · {b.start_time} · {b.hours}h × {b.num_cleaners}
                     </Text>
                   </View>
                   <View style={[st.pill,{backgroundColor:meta.bg}]}>
@@ -590,7 +603,7 @@ export default function Admin() {
               <View style={st.rowBetween}>
                 <View style={{flex:1}}>
                   <Text style={st.cardTitle}>{b.address}</Text>
-                  <Text style={st.cardSub}>{b.date} · {b.hours}h · {money(b.total_price)}</Text>
+                  <Text style={st.cardSub}>{prettyDate(b.date)} · {b.hours}h · {money(b.total_price)}</Text>
                 </View>
                 <View style={[st.pill,{backgroundColor:C.redLt}]}>
                   <Text style={[st.pillTxt,{color:C.red}]}>Disputed</Text>

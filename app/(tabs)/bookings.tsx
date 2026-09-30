@@ -19,6 +19,19 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
   cancelled:             {label:'Cancelled',         color:C.red,    bg:C.redLt,     icon:'✕'},
 };
 
+
+const prettyDate = (d?: string) => {
+  if (!d) return '—';
+  const dt = new Date(d + 'T00:00:00');
+  if (isNaN(dt.getTime())) return d;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((dt.getTime() - today.getTime()) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  return dt.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
+};
+
 const DISPUTE_REASONS = [
   'Cleaner never showed up',
   'Work was incomplete',
@@ -115,7 +128,7 @@ export default function Bookings() {
                 </View>
                 <View style={{flex:1}}>
                   <Text style={st.cleanerName}>{cleaner?.name||'Cleaner'}</Text>
-                  <Text style={st.cleanerSub}>{b.numCleaners} cleaner · {b.hours}h · {b.date} {b.time}</Text>
+                  <Text style={st.cleanerSub}>{b.numCleaners} cleaner · {b.hours}h · {prettyDate(b.date)} at {b.time}</Text>
                 </View>
                 <View style={{alignItems:'flex-end'}}>
                   <Text style={st.price}>€{Number(b.finalTotal ?? b.total).toFixed(2)}</Text>

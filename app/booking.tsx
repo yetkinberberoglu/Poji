@@ -13,12 +13,47 @@ import {
   type ServiceType, type ServiceExtra, type PropertySize
 } from '../lib/services';
 
-const DATE_LABELS = ['Mon 1 Sep','Tue 2 Sep','Wed 3 Sep','Thu 4 Sep','Fri 5 Sep','Sat 6 Sep','Sun 7 Sep'];
-const DATE_VALUES: Record<string,string> = {
-  'Mon 1 Sep':'2026-09-01','Tue 2 Sep':'2026-09-02','Wed 3 Sep':'2026-09-03',
-  'Thu 4 Sep':'2026-09-04','Fri 5 Sep':'2026-09-05','Sat 6 Sep':'2026-09-06','Sun 7 Sep':'2026-09-07'
+const TIMES = [
+  '07:00','08:00','09:00','10:00','11:00','12:00',
+  '13:00','14:00','15:00','16:00','17:00','18:00',
+];
+
+/** How far ahead clients can book */
+const DAYS_AHEAD = 30;
+/** Cleaners need a little notice before a job starts */
+const LEAD_HOURS = 2;
+
+const iso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+const buildDays = () => {
+  const out: { value:string; dayName:string; dayNum:number; month:string; isToday:boolean; isTomorrow:boolean; isWeekend:boolean }[] = [];
+  const today = new Date(); today.setHours(0,0,0,0);
+  for (let i = 0; i < DAYS_AHEAD; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    out.push({
+      value: iso(d),
+      dayName: d.toLocaleDateString('en-GB', { weekday:'short' }),
+      dayNum: d.getDate(),
+      month: d.toLocaleDateString('en-GB', { month:'short' }),
+      isToday: i === 0,
+      isTomorrow: i === 1,
+      isWeekend: d.getDay() === 0 || d.getDay() === 6,
+    });
+  }
+  return out;
 };
-const TIMES = ['08:00','09:00','10:00','11:00','12:00','14:00','15:00','16:00','17:00'];
+
+/** A slot today is only bookable if it's far enough in the future */
+const slotAvailable = (dateValue: string, time: string) => {
+  const now = new Date();
+  if (dateValue !== iso(now)) return true;
+  const [h, m] = time.split(':').map(Number);
+  const slot = new Date();
+  slot.setHours(h, m, 0, 0);
+  return slot.getTime() - now.getTime() >= LEAD_HOURS * 3600 * 1000;
+};
 const STEPS = ['Service','Place','Extras','Cleaner','When','Confirm'];
 
 const fmtH = (h:number) => h % 1 === 0 ? `${h}h` : `${Math.floor(h)}h 30m`;
@@ -46,6 +81,8 @@ export default function BookingScreen() {
   const [num, setNum]   = useState(1);
   const [pickedCleaner, setPicked] = useState<string|null>(params.cleanerId || null);
   const [lockedToCleaner, setLocked] = useState<boolean>(!!params.cleanerId);
+  const [days] = useState(buildDays);
+  const [monthOffset, setMonthOffset] = useState(0);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [manualHours, setManualHours] = useState<number|null>(null);
@@ -126,6 +163,10 @@ export default function BookingScreen() {
 
   useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
 
+  useEffect(() => {
+    if (date && time && !slotAvailable(date, time)) setTime('');
+  }, [date]);
+
   // drop a cleaner who can no longer cover the team size
   useEffect(() => {
     if (pickedCleaner && !allCapable.find(c => c.id === pickedCleaner)) setPicked(null);
@@ -147,7 +188,7 @@ export default function BookingScreen() {
       await addBooking({
         cleanerId: cleaner.id,
         address: address || '12 Tower Road, Sliema',
-        date: DATE_VALUES[date] || '2026-09-01',
+        date: date || iso(new Date()),
         time: time || '10:00',
         hours, numCleaners: num,
         propertyType: size, serviceType: svc,
@@ -482,22 +523,63 @@ export default function BookingScreen() {
               )}
             </View>
 
-            <Text style={s.lbl}>Select date</Text>
-            {DATE_LABELS.map(d=>(
-              <TouchableOpacity key={d} style={[s.dateBtn, date===d&&s.dateBtnOn]} onPress={()=>setDate(d)}>
-                <Text style={[s.dateTxt, date===d&&s.dateTxtOn]}>{d}</Text>
-                {date===d && <Text style={s.dateTick}>✓</Text>}
-              </TouchableOpacity>
-            ))}
+            <Text style={s.lbl}>Pick a day</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.dayStrip}>
+              {days.map(d=>{
+                const on = date === d.value;
+                const anySlot = TIMES.some(t => slotAvailable(d.value, t));
+                return (
+                  <TouchableOpacity key={d.value}
+                    style={[s.dayCard, on&&s.dayCardOn, !anySlot&&s.dayCardOff]}
+                    disabled={!anySlot}
+                    onPress={()=>setDate(d.value)}>
+                    <Text style={[s.dayName, on&&s.dayOnTxt, !anySlot&&s.dayOffTxt]}>
+                      {d.isToday ? 'Today' : d.isTomorrow ? 'Tmrw' : d.dayName}
+                    </Text>
+                    <Text style={[s.dayNum, on&&s.dayOnTxt, !anySlot&&s.dayOffTxt]}>{d.dayNum}</Text>
+                    <Text style={[s.dayMonth, on&&s.dayOnTxt, !anySlot&&s.dayOffTxt]}>{d.month}</Text>
+                    {d.isWeekend && <View style={[s.weekendDot, on&&{backgroundColor:C.white}]} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
-            <Text style={s.lbl}>Start time</Text>
-            <View style={s.chips}>
-              {TIMES.map(ti=>(
-                <TouchableOpacity key={ti} style={[s.chip, time===ti&&s.chipOn]} onPress={()=>setTime(ti)}>
-                  <Text style={[s.chipTxt, time===ti&&s.chipTxtOn]}>{ti}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {date ? (
+              <>
+                <Text style={s.lbl}>Start time</Text>
+                <Text style={s.hint}>
+                  The job runs about {fmtH(hours)}, so it would finish around{' '}
+                  {time ? (() => {
+                    const [h,m] = time.split(':').map(Number);
+                    const end = new Date(); end.setHours(h, m + hours*60, 0, 0);
+                    return end.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+                  })() : '—'}.
+                </Text>
+                <View style={s.chips}>
+                  {TIMES.map(ti=>{
+                    const ok = slotAvailable(date, ti);
+                    return (
+                      <TouchableOpacity key={ti}
+                        style={[s.chip, time===ti&&s.chipOn, !ok&&s.chipOff]}
+                        disabled={!ok}
+                        onPress={()=>setTime(ti)}>
+                        <Text style={[s.chipTxt, time===ti&&s.chipTxtOn, !ok&&s.chipTxtOff]}>{ti}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {date === iso(new Date()) && (
+                  <Text style={s.leadNote}>
+                    Same-day bookings need at least {LEAD_HOURS} hours' notice.
+                  </Text>
+                )}
+              </>
+            ) : (
+              <View style={s.pickDayBox}>
+                <Text style={s.pickDayTxt}>Choose a day above to see available times.</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -521,7 +603,8 @@ export default function BookingScreen() {
                 ['Service',   `${svcType?.icon || ''} ${svcType?.name || ''}`],
                 ['Property',  `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`],
                 ['Address',   address || '—'],
-                ['Date',      date || '—'],
+                ['Date',      date ? new Date(date+'T00:00:00').toLocaleDateString('en-GB',
+                                {weekday:'long', day:'numeric', month:'long'}) : '—'],
                 ['Time',      time || '—'],
                 ['Duration',  `${fmtH(hours)} × ${num} cleaner${num>1?'s':''}`],
                 ['Materials', suppliesByCleaner ? 'Cleaner brings them' : 'Client provides'],
@@ -765,6 +848,19 @@ const s = StyleSheet.create({
   estNote:{fontSize:11,color:C.amber,fontWeight:'700'},
   adjustTxt:{fontSize:12,color:C.primary,fontWeight:'700',textDecorationLine:'underline'},
 
+  dayStrip:{gap:8,paddingVertical:4,paddingRight:20},
+  dayCard:{width:62,paddingVertical:12,borderRadius:14,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,alignItems:'center',gap:2},
+  dayCardOn:{backgroundColor:C.primary,borderColor:C.primary},
+  dayCardOff:{opacity:0.35},
+  dayName:{fontSize:11,fontWeight:'700',color:C.muted},
+  dayNum:{fontSize:20,fontWeight:'800',color:C.dark},
+  dayMonth:{fontSize:10,color:C.muted,fontWeight:'600'},
+  dayOnTxt:{color:C.white},
+  dayOffTxt:{color:C.muted},
+  weekendDot:{width:4,height:4,borderRadius:2,backgroundColor:C.amber,marginTop:2},
+  pickDayBox:{backgroundColor:C.bgAlt,borderRadius:12,padding:16,marginTop:20,borderWidth:1,borderColor:C.border},
+  pickDayTxt:{fontSize:13,color:C.muted,textAlign:'center'},
+  leadNote:{fontSize:11,color:C.amber,fontWeight:'700',marginTop:10},
   dateBtn:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingVertical:13,paddingHorizontal:16,borderRadius:12,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:8},
   dateBtnOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
   dateTxt:{fontSize:14,fontWeight:'600',color:C.muted},
