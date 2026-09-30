@@ -6,9 +6,10 @@ import { router } from 'expo-router';
 import { useState, useEffect, useMemo } from 'react';
 import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
+import { findTrade, TRADES } from '../constants/trades';
 import { notify } from '../lib/notify';
 
-const TABS = ['Overview','Applications','Clients','Cleaners','Bookings','Disputes'];
+const TABS = ['Overview','Applications','Clients','Providers','Bookings','Disputes'];
 
 const APP_STATUS: Record<string,{label:string;color:string;bg:string}> = {
   draft:        {label:'Draft',        color:C.muted, bg:C.bgAlt},
@@ -61,6 +62,7 @@ export default function Admin() {
   const [rejectFor, setRejectFor]= useState<string|null>(null);
   const [rejectText, setRejectTxt] = useState('');
   const [search, setSearch]      = useState('');
+  const [tradeFilter, setTradeF] = useState<string|null>(null);
   const [notAdmin, setNotAdmin]  = useState(false);
 
   const load = async () => {
@@ -163,6 +165,8 @@ export default function Admin() {
         earned, rating, reviewCount: myRevs.length,
         acceptRate: mine.length ? (done.length/mine.length)*100 : 0,
         status: app?.verification_status || 'none',
+        categories: app?.categories || [],
+        acceptsUrgent: !!app?.accepts_urgent,
       };
     }).sort((a,b)=>b.earned-a.earned);
   },[profiles, bookings, apps, reviews]);
@@ -390,6 +394,10 @@ export default function Admin() {
                     ['Company',a.company_name], ['VAT',a.vat_number],
                   ]}/>
                   <Detail title="Service" rows={[
+                    ['Trades', (a.categories||[]).map((id:string)=>
+                      findTrade(id)?.name || id).join(', ') || '—'],
+                    ['Emergency callouts', a.accepts_urgent ? 'Yes' : 'No'],
+                    ['Travel radius', a.service_radius_km ? `${a.service_radius_km} km` : '—'],
                     ['Rate',`€${a.hourly_rate}`], ['Min hours',`${a.min_hours}h`],
                     ['Supplies',a.brings_own_supplies?'Brings own':'Client provides'],
                     ['Areas',(a.service_areas||[]).join(', ')], ['Bio',a.bio],
@@ -486,13 +494,40 @@ export default function Admin() {
       {/* ════════ CLEANERS ════════ */}
       {tab===3 && (
         <>
-          <SearchBar value={search} onChange={setSearch} placeholder="Search cleaners…" />
+          <SearchBar value={search} onChange={setSearch} placeholder="Search providers…" />
+
+          {(() => {
+            const used = TRADES.filter(t =>
+              cleaners.some((c:any) => (c.categories||[]).includes(t.id)));
+            if (used.length < 2) return null;
+            return (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                style={{maxHeight:44,marginBottom:12}} contentContainerStyle={st.tStrip}>
+                <TouchableOpacity style={[st.tChip, !tradeFilter&&st.tChipOn]}
+                  onPress={()=>setTradeF(null)}>
+                  <Text style={[st.tChipTxt, !tradeFilter&&st.tChipTxtOn]}>All</Text>
+                </TouchableOpacity>
+                {used.map(t=>(
+                  <TouchableOpacity key={t.id} style={[st.tChip, tradeFilter===t.id&&st.tChipOn]}
+                    onPress={()=>setTradeF(t.id)}>
+                    <Text style={[st.tChipTxt, tradeFilter===t.id&&st.tChipTxtOn]}>
+                      {t.icon} {t.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            );
+          })()}
+
           <View style={st.miniRow}>
             <Mini label="Total"    value={String(cleaners.length)} />
             <Mini label="Approved" value={String(cleaners.filter(c=>c.status==='approved').length)} color={C.green} />
             <Mini label="Pending"  value={String(pendingApps.length)} color={C.amber} />
           </View>
-          {cleaners.filter(c=>!q || (c.full_name||'').toLowerCase().includes(q)).map(c=>{
+          {cleaners
+            .filter(c=>!q || (c.full_name||'').toLowerCase().includes(q))
+            .filter((c:any)=>!tradeFilter || (c.categories||[]).includes(tradeFilter))
+            .map(c=>{
             const meta = APP_STATUS[c.status] || {label:'No application',color:C.muted,bg:C.bgAlt};
             return (
               <View key={c.id} style={st.card}>
@@ -507,6 +542,31 @@ export default function Admin() {
                     <Text style={[st.pillTxt,{color:meta.color}]}>{meta.label}</Text>
                   </View>
                 </View>
+                {((c as any).categories || []).length > 0 && (
+                  <View style={st.badgeWrap}>
+                    {((c as any).categories || []).slice(0,6).map((id:string)=>{
+                      const t = findTrade(id);
+                      return (
+                        <View key={id} style={st.tradeBadge}>
+                          <Text style={st.tradeBadgeTxt}>{t?.icon || '•'} {t?.name || id}</Text>
+                        </View>
+                      );
+                    })}
+                    {((c as any).categories || []).length > 6 && (
+                      <View style={st.tradeBadge}>
+                        <Text style={st.tradeBadgeTxt}>
+                          +{((c as any).categories || []).length - 6}
+                        </Text>
+                      </View>
+                    )}
+                    {(c as any).acceptsUrgent && (
+                      <View style={[st.tradeBadge,{backgroundColor:C.amberLt,borderColor:'#FDE68A'}]}>
+                        <Text style={[st.tradeBadgeTxt,{color:C.amber}]}>⚡ Emergency</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
                 <View style={st.metricRow}>
                   <Metric label="Jobs"     value={`${c.completed}/${c.jobs}`} />
                   <Metric label="Earned"   value={money(c.earned)} color={C.green} />
@@ -761,6 +821,14 @@ const st = StyleSheet.create({
   docRow:{flexDirection:'row',flexWrap:'wrap',gap:8},
   docBtn:{backgroundColor:C.primaryLt,paddingHorizontal:12,paddingVertical:9,borderRadius:10,borderWidth:1,borderColor:C.border},
   docTxt:{fontSize:12,color:C.primary,fontWeight:'700'},
+  tStrip:{gap:8,paddingRight:20},
+  tChip:{paddingHorizontal:12,paddingVertical:8,borderRadius:18,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border},
+  tChipOn:{backgroundColor:C.primary,borderColor:C.primary},
+  tChipTxt:{fontSize:11,fontWeight:'700',color:C.muted},
+  tChipTxtOn:{color:C.white},
+  badgeWrap:{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:8},
+  tradeBadge:{backgroundColor:C.primaryLt,paddingHorizontal:9,paddingVertical:4,borderRadius:10,borderWidth:1,borderColor:C.border},
+  tradeBadgeTxt:{fontSize:10,fontWeight:'700',color:C.primary},
   metricRow:{flexDirection:'row',gap:8,marginTop:4},
   metric:{flex:1,backgroundColor:C.bg,borderRadius:10,paddingVertical:8,alignItems:'center'},
   metricVal:{fontSize:14,fontWeight:'800',color:C.dark},

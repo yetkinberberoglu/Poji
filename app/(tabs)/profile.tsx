@@ -54,7 +54,7 @@ export default function Profile() {
         <Text style={s.name}>{userName || 'My Account'}</Text>
         <View style={[s.roleBadge, userRole==='cleaner'&&s.roleBadgeCleaner]}>
           <Text style={[s.roleTxt, userRole==='cleaner'&&s.roleTxtCleaner]}>
-            {userRole==='cleaner'?'🧹 Cleaner':'👤 Client'}
+            {userRole==='cleaner'?'🛠️ Provider':'🏠 Client'}
           </Text>
         </View>
         <View style={s.statsRow}>
@@ -110,7 +110,8 @@ export default function Profile() {
         {title:'Account', items:[
           {icon:'💳',label:'Payment Methods',sub:'Cards & billing'},
           {icon:'🔔',label:'Notifications',sub:'All enabled'},
-          {icon:'🛡',label:'Privacy & Security',sub:'Manage your data'},
+          {icon:'🛡',label:'Privacy Notice',sub:'What we collect and why', go:'/legal?doc=privacy'},
+          {icon:'📄',label:'Terms of Service',sub:'How Poji works',         go:'/legal?doc=terms'},
         ]},
         {title:'Support', items:[
           {icon:'💬',label:'Help & FAQ',sub:'Common questions'},
@@ -121,7 +122,8 @@ export default function Profile() {
         <View key={section.title} style={s.section}>
           <Text style={s.sectionTitle}>{section.title}</Text>
           {section.items.map((item,i)=>(
-            <TouchableOpacity key={item.label} style={[s.menuItem, i>0&&s.menuBorder]}>
+            <TouchableOpacity key={item.label} style={[s.menuItem, i>0&&s.menuBorder]}
+              onPress={()=> (item as any).go ? router.push((item as any).go) : undefined}>
               <Text style={s.menuIcon}>{item.icon}</Text>
               <View style={{flex:1}}>
                 <Text style={s.menuLabel}>{item.label}</Text>
@@ -140,7 +142,7 @@ export default function Profile() {
 
       {userRole==='cleaner' && (
         <TouchableOpacity style={s.providerBtn} onPress={()=>router.replace('/provider')}>
-          <Text style={s.providerTxt}>🧹  Go to Provider Dashboard</Text>
+          <Text style={s.providerTxt}>🛠️  Go to Provider Dashboard</Text>
         </TouchableOpacity>
       )}
 

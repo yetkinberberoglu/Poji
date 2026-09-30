@@ -61,6 +61,7 @@ export default function RootLayout() {
         <Stack.Screen name="cleaner/[id]" />
         <Stack.Screen name="provider" />
         <Stack.Screen name="review" />
+        <Stack.Screen name="legal" />
       </Stack>
       <InstallPrompt />
     </AppProvider>

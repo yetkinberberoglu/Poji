@@ -3,6 +3,7 @@ import { C, S } from '../constants/theme';
 import { useApp } from '../context/AppContext';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
+import { findTrade } from '../constants/trades';
 import { useState, useEffect } from 'react';
 import { fmtDuration } from '../lib/services';
 import { directionsLink, mapsLink } from '../lib/location';
@@ -150,7 +151,24 @@ export default function ProviderScreen() {
       <View style={s0.header}>
         <View style={{flex:1}}>
           <Text style={s0.heading}>Provider Dashboard</Text>
-          <Text style={s0.sub}>{userName||'Cleaner'} · Poji Malta</Text>
+          <Text style={s0.sub}>{userName||'Provider'} · Poji Malta</Text>
+          {myCategories.length > 0 && (
+            <View style={s0.myTrades}>
+              {myCategories.slice(0,4).map(id=>{
+                const t = findTrade(id);
+                return (
+                  <View key={id} style={s0.myTradeChip}>
+                    <Text style={s0.myTradeTxt}>{t?.icon || '•'} {t?.name || id}</Text>
+                  </View>
+                );
+              })}
+              {myCategories.length > 4 && (
+                <View style={s0.myTradeChip}>
+                  <Text style={s0.myTradeTxt}>+{myCategories.length - 4}</Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
         <TouchableOpacity style={s0.signOutBtn} onPress={handleSignOut}>
           <Text style={s0.signOutTxt}>Sign Out</Text>
@@ -529,9 +547,12 @@ export default function ProviderScreen() {
 
 const s0 = StyleSheet.create({
   wrap:{flex:1,backgroundColor:C.bg},
-  header:{flexDirection:'row',alignItems:'center',paddingHorizontal:20,paddingTop:60,paddingBottom:20,gap:12},
+  header:{flexDirection:'row',alignItems:'flex-start',paddingHorizontal:20,paddingTop:60,paddingBottom:20,gap:12},
   heading:{fontSize:22,fontWeight:'800',color:C.dark},
   sub:{fontSize:13,color:C.muted,marginTop:2},
+  myTrades:{flexDirection:'row',flexWrap:'wrap',gap:5,marginTop:8},
+  myTradeChip:{backgroundColor:C.primaryLt,paddingHorizontal:8,paddingVertical:3,borderRadius:9,borderWidth:1,borderColor:C.border},
+  myTradeTxt:{fontSize:10,fontWeight:'700',color:C.primary},
   signOutBtn:{backgroundColor:C.redLt,paddingHorizontal:14,paddingVertical:8,borderRadius:20,borderWidth:1,borderColor:'#FECACA'},
   signOutTxt:{fontSize:13,fontWeight:'700',color:C.red},
   statsRow:{flexDirection:'row',paddingHorizontal:20,gap:12,marginBottom:24},

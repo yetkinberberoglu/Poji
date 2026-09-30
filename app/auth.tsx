@@ -58,7 +58,7 @@ export default function Auth() {
         <View style={s.logoWrap}>
           <View style={s.logo}><Text style={s.logoTxt}>P</Text></View>
           <Text style={s.brand}>Poji</Text>
-          <Text style={s.sub}>Malta's home services marketplace</Text>
+          <Text style={s.sub}>Home services in Malta</Text>
         </View>
 
         <View style={s.tabRow}>
@@ -83,8 +83,8 @@ export default function Auth() {
               <View style={s.field}>
                 <Text style={s.label}>I am a...</Text>
                 <View style={s.roleRow}>
-                  {[{k:'client',icon:'👤',lbl:'Client',desc:'I need cleaning'},
-                    {k:'cleaner',icon:'🧹',lbl:'Cleaner',desc:'I provide cleaning'}].map(r => (
+                  {[{k:'client', icon:'🏠', lbl:'Client',   desc:'I need a service'},
+                    {k:'cleaner', icon:'🛠️', lbl:'Provider', desc:'I provide a service'}].map(r => (
                     <TouchableOpacity key={r.k} style={[s.roleBtn, role===r.k && s.roleBtnOn]} onPress={()=>setRole(r.k)}>
                       <Text style={s.roleIcon}>{r.icon}</Text>
                       <Text style={[s.roleLbl, role===r.k && s.roleLblOn]}>{r.lbl}</Text>
@@ -92,6 +92,12 @@ export default function Auth() {
                     </TouchableOpacity>
                   ))}
                 </View>
+                {role === 'cleaner' && (
+                  <Text style={s.roleNote}>
+                    You'll pick your trades next — cleaning, electrical, plumbing,
+                    roadside and more. Choose as many as you cover.
+                  </Text>
+                )}
               </View>
             </>
           )}
@@ -107,6 +113,21 @@ export default function Auth() {
             <TextInput style={s.input} placeholder="Min. 6 characters" placeholderTextColor={C.muted}
               value={password} onChangeText={(t:string)=>{setPassword(t);clear();}} secureTextEntry />
           </View>
+
+          {mode==='register' && (
+            <View style={s.consentBox}>
+              <Text style={s.consentTxt}>
+                By creating an account you agree to our{' '}
+                <Text style={s.consentLink} onPress={()=>router.push('/legal?doc=terms')}>
+                  Terms of Service
+                </Text>
+                {' '}and{' '}
+                <Text style={s.consentLink} onPress={()=>router.push('/legal?doc=privacy')}>
+                  Privacy Notice
+                </Text>.
+              </Text>
+            </View>
+          )}
 
           <TouchableOpacity style={[s.btn, loading && s.btnDis]}
             onPress={mode==='login'?handleLogin:handleRegister} disabled={loading}>
@@ -156,9 +177,13 @@ const s = StyleSheet.create({
   roleLbl:{fontSize:15,fontWeight:'700',color:C.muted},
   roleLblOn:{color:C.primary},
   roleDesc:{fontSize:11,color:C.muted,textAlign:'center'},
+  roleNote:{fontSize:12,color:C.primary,lineHeight:17,marginTop:10,backgroundColor:C.primaryLt,padding:12,borderRadius:12,borderWidth:1,borderColor:C.border},
   btn:{backgroundColor:C.primary,borderRadius:16,paddingVertical:18,alignItems:'center',marginTop:4,...S.md},
   btnDis:{backgroundColor:C.muted},
   btnTxt:{color:C.white,fontSize:17,fontWeight:'700'},
+  consentBox:{paddingHorizontal:2,marginTop:2},
+  consentTxt:{fontSize:12,color:C.muted,lineHeight:18,textAlign:'center'},
+  consentLink:{color:C.primary,fontWeight:'700'},
   forgot:{alignItems:'center',paddingVertical:4},
   forgotTxt:{fontSize:13,color:C.primary,fontWeight:'600'},
 });

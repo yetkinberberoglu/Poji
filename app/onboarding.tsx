@@ -259,7 +259,7 @@ export default function Onboarding() {
         <TouchableOpacity onPress={()=>step>0?setStep(step-1):router.back()}>
           <Text style={st.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={st.title}>Become a Cleaner</Text>
+        <Text style={st.title}>Become a Provider</Text>
         <Text style={st.stepNum}>{step+1}/{STEPS.length}</Text>
       </View>
 
@@ -637,6 +637,21 @@ export default function Onboarding() {
                 By submitting you confirm all information is true. False documents will result in a permanent ban.
               </Text>
             </View>
+
+            <View style={st.gdprBox}>
+              <Text style={st.gdprTitle}>🔒  How we handle your documents</Text>
+              <Text style={st.gdprTxt}>
+                Your ID and selfie are stored encrypted and seen only by our verification
+                team — never by clients. We keep them for 5 years after you leave the
+                platform, as Maltese law requires.
+              </Text>
+              <Text style={st.gdprTxt}>
+                You can ask for a copy, a correction or deletion at any time.
+              </Text>
+              <TouchableOpacity onPress={()=>router.push('/legal?doc=privacy')}>
+                <Text style={st.gdprLink}>Read the full Privacy Notice ›</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -722,6 +737,10 @@ const st = StyleSheet.create({
   calcRow:{flexDirection:'row',justifyContent:'space-between'},
   calcLbl:{fontSize:13,color:C.muted},
   calcVal:{fontSize:14,fontWeight:'700',color:C.dark},
+  gdprBox:{backgroundColor:C.primaryLt,borderRadius:14,padding:16,marginTop:14,gap:8,borderWidth:1,borderColor:C.border},
+  gdprTitle:{fontSize:14,fontWeight:'800',color:C.primary},
+  gdprTxt:{fontSize:12,color:C.text,lineHeight:18},
+  gdprLink:{fontSize:12,color:C.primary,fontWeight:'700',marginTop:2},
   noteBox:{backgroundColor:C.amberLt,borderRadius:12,padding:14,marginTop:16,borderWidth:1,borderColor:'#FDE68A'},
   noteTxt:{fontSize:12,color:C.text,lineHeight:18},
   summaryBox:{backgroundColor:C.white,borderRadius:16,padding:16,marginTop:20,borderWidth:1,borderColor:C.border,...S.sm},

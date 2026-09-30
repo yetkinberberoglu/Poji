@@ -189,6 +189,7 @@ export default function Roadside() {
             <Text style={s.stepIntro}>Where are you?</Text>
             <Text style={s.hint}>
               We send your exact position so the provider drives straight to you.
+              It goes only to the provider who accepts, and is deleted after 90 days.
             </Text>
 
             {locBusy ? (
