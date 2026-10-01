@@ -1,6 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { C, S } from '../../constants/theme';
+import Logo from '../../components/Logo';
 import { CATEGORIES, tradesIn } from '../../constants/trades';
 import { useApp } from '../../context/AppContext';
 
@@ -15,9 +16,12 @@ export default function Home() {
     <ScrollView style={s.wrap} showsVerticalScrollIndicator={false}>
 
       <View style={s.header}>
-        <View>
-          <Text style={s.greeting}>Good day{userName ? `, ${userName.split(' ')[0]}` : ''} 👋</Text>
-          <Text style={s.heading}>What do you need?</Text>
+        <View style={{flexDirection:'row',alignItems:'center',gap:12,flex:1}}>
+          <Logo size={38} />
+          <View>
+            <Text style={s.greeting}>Good day{userName ? `, ${userName.split(' ')[0]}` : ''} 👋</Text>
+            <Text style={s.heading}>What do you need?</Text>
+          </View>
         </View>
         <TouchableOpacity style={s.avatar} onPress={() => router.push('/(tabs)/profile')}>
           <Text style={{ fontSize:22 }}>👤</Text>

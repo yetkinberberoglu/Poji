@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { C, S } from '../constants/theme';
+import Logo from '../components/Logo';
 
 export default function Auth() {
   const [mode, setMode]         = useState('login');
@@ -56,7 +57,7 @@ export default function Auth() {
       <ScrollView style={s.wrap} contentContainerStyle={s.container} keyboardShouldPersistTaps="handled">
 
         <View style={s.logoWrap}>
-          <View style={s.logo}><Text style={s.logoTxt}>P</Text></View>
+          <View style={s.logoShadow}><Logo size={84} /></View>
           <Text style={s.brand}>Poji</Text>
           <Text style={s.sub}>Home services in Malta</Text>
         </View>
@@ -151,8 +152,7 @@ const s = StyleSheet.create({
   wrap:{flex:1,backgroundColor:C.bg},
   container:{padding:24,paddingTop:80,paddingBottom:48,gap:16},
   logoWrap:{alignItems:'center',marginBottom:8},
-  logo:{width:80,height:80,borderRadius:24,backgroundColor:C.primary,alignItems:'center',justifyContent:'center',marginBottom:14,...S.md},
-  logoTxt:{color:C.white,fontSize:38,fontWeight:'800'},
+  logoShadow:{marginBottom:14,borderRadius:24,...S.md},
   brand:{fontSize:34,fontWeight:'800',color:C.dark},
   sub:{fontSize:14,color:C.muted,marginTop:4},
   tabRow:{flexDirection:'row',backgroundColor:C.bgAlt,borderRadius:14,padding:4,borderWidth:1,borderColor:C.border},

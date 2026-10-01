@@ -1,6 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
+import Logo from '../components/Logo';
 
 const DISMISS_KEY = 'poji_install_dismissed';
 
@@ -68,7 +69,7 @@ export default function InstallPrompt() {
   return (
     <View style={s.wrap}>
       <View style={s.card}>
-        <View style={s.iconBox}><Text style={s.icon}>◎</Text></View>
+        <Logo size={42} />
 
         <View style={{flex:1}}>
           <Text style={s.title}>Add Poji to your home screen</Text>
