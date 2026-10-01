@@ -8,13 +8,16 @@ import { supabase } from '../lib/supabase';
 
 export default function Services() {
   const { category } = useLocalSearchParams<{category?: string}>();
-  const { providers } = useApp();
+  const { providers, availableTrades, providersFor } = useApp();
   const cat = findCategory(category);
-  const trades = tradesIn(category || '');
+  const trades = tradesIn(category || '').filter(t => availableTrades.includes(t.id));
   const [interested, setInterested] = useState<string[]>([]);
 
-  const countFor = (tradeId: string) =>
-    providers.filter(p => (p.categories || []).includes(tradeId)).length;
+  const countFor = (tradeId: string) => providersFor(tradeId).length;
+  const cheapestFor = (tradeId: string) => {
+    const list = providersFor(tradeId);
+    return list.length ? Math.min(...list.map(p => p.rate)) : 0;
+  };
 
   const registerInterest = async (t: Trade) => {
     if (interested.includes(t.id)) return;
@@ -28,7 +31,6 @@ export default function Services() {
   };
 
   const open = (t: Trade) => {
-    if (!t.live) { registerInterest(t); return; }
     if (t.roadside) { router.push('/roadside'); return; }
     router.push(`/providers?trade=${t.id}`);
   };
@@ -73,38 +75,47 @@ export default function Services() {
         </View>
       )}
 
-      {trades.map(t=>{
-        const n = countFor(t.id);
-        const wanted = interested.includes(t.id);
+      {trades.length === 0 ? (
+        <View style={s.emptyBox}>
+          <Text style={s.emptyIcon}>{cat.icon}</Text>
+          <Text style={s.emptyTitle}>Nobody covers this yet</Text>
+          <Text style={s.emptyTxt}>
+            We're signing providers up across Malta. Tell us what you need and
+            we'll message you when someone can do it.
+          </Text>
+          <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push('/request')}>
+            <Text style={s.emptyBtnTxt}>Tell us what you need</Text>
+          </TouchableOpacity>
+        </View>
+      ) : trades.map(t=>{
+        const n    = countFor(t.id);
+        const from = cheapestFor(t.id);
         return (
-          <TouchableOpacity key={t.id}
-            style={[s.card, !t.live && s.cardOff, wanted && s.cardWanted]}
-            onPress={()=>open(t)}>
-            <Text style={[s.cardIcon, !t.live && !wanted && s.dim]}>{t.icon}</Text>
+          <TouchableOpacity key={t.id} style={s.card} onPress={()=>open(t)}>
+            <Text style={s.cardIcon}>{t.icon}</Text>
             <View style={{flex:1}}>
-              <Text style={[s.cardName, !t.live && !wanted && s.dim]}>{t.name}</Text>
-              <Text style={[s.cardDesc, !t.live && !wanted && s.dim]}>{t.desc}</Text>
-              {t.live ? (
-                <Text style={[s.cardMeta,{color:cat.colour}]}>
-                  {n > 0
-                    ? `${n} provider${n>1?'s':''} available`
-                    : 'No one signed up yet'}
-                  {t.pricing === 'fixed' ? ' · fixed price' : ' · hourly'}
-                </Text>
-              ) : (
-                <Text style={s.cardMetaSoon}>
-                  {wanted ? 'We\'ll message you when it goes live' : 'Tap to register interest'}
-                </Text>
-              )}
+              <Text style={s.cardName}>{t.name}</Text>
+              <Text style={s.cardDesc}>{t.desc}</Text>
+              <Text style={[s.cardMeta,{color:cat.colour}]}>
+                {n} {n===1?'provider':'providers'}
+                {t.pricing === 'fixed' ? ' · fixed price' : ` · from €${from}/hr`}
+              </Text>
             </View>
-            {t.live
-              ? <Text style={s.cardGo}>›</Text>
-              : <View style={[s.tag, wanted&&s.tagOn]}>
-                  <Text style={[s.tagTxt, wanted&&s.tagTxtOn]}>{wanted ? '✓' : 'Soon'}</Text>
-                </View>}
+            <Text style={s.cardGo}>›</Text>
           </TouchableOpacity>
         );
       })}
+
+      {trades.length > 0 && (
+        <TouchableOpacity style={s.requestRow} onPress={()=>router.push('/request')}>
+          <Text style={s.requestIcon}>💬</Text>
+          <View style={{flex:1}}>
+            <Text style={s.requestTitle}>Something else in {cat.name.toLowerCase()}?</Text>
+            <Text style={s.requestTxt}>Tell us and we'll find someone</Text>
+          </View>
+          <Text style={s.cardGo}>›</Text>
+        </TouchableOpacity>
+      )}
 
       {interested.length > 0 && (
         <View style={s.thanksBox}>
@@ -149,8 +160,17 @@ const s = StyleSheet.create({
   tagTxt:{fontSize:10,fontWeight:'800',color:C.amber},
   tagTxtOn:{color:C.white},
 
+  emptyBox:{marginHorizontal:20,backgroundColor:C.white,borderRadius:18,padding:28,alignItems:'center',gap:10,borderWidth:1,borderColor:C.border},
+  emptyTitle:{fontSize:17,fontWeight:'800',color:C.dark,textAlign:'center'},
+  emptyBtn:{backgroundColor:C.primary,borderRadius:14,paddingVertical:13,paddingHorizontal:24,marginTop:4},
+  emptyBtnTxt:{color:C.white,fontSize:14,fontWeight:'700'},
+  requestRow:{flexDirection:'row',alignItems:'center',gap:14,marginHorizontal:20,marginTop:4,marginBottom:12,backgroundColor:C.bgAlt,borderRadius:16,padding:15,borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
+  requestIcon:{fontSize:22},
+  requestTitle:{fontSize:14,fontWeight:'800',color:C.dark},
+  requestTxt:{fontSize:12,color:C.muted,marginTop:2},
   thanksBox:{marginHorizontal:20,marginTop:10,backgroundColor:C.greenLt,borderRadius:14,padding:14,gap:5,borderWidth:1,borderColor:'#A7F3D0'},
   thanksTitle:{fontSize:14,fontWeight:'800',color:C.green},
   thanksTxt:{fontSize:12,color:C.text,lineHeight:18},
-  emptyTxt:{fontSize:14,color:C.muted,textAlign:'center',marginTop:40},
+  emptyIcon:{fontSize:42},
+  emptyTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
 });

@@ -19,7 +19,7 @@ export default function TabLayout() {
       tabBarLabelStyle: { fontSize:11, fontWeight:'600' },
     }}>
       <Tabs.Screen name="home"     options={{ title:'Home',     tabBarIcon:({focused})=><Icon e="🏠" focused={focused}/> }} />
-      <Tabs.Screen name="cleaners" options={{ title:'Cleaners', tabBarIcon:({focused})=><Icon e="🧹" focused={focused}/> }} />
+      <Tabs.Screen name="cleaners" options={{ title:'Services', tabBarIcon:({focused})=><Icon e="🔎" focused={focused}/> }} />
       <Tabs.Screen name="bookings" options={{ title:'Bookings',
         tabBarIcon:({focused})=>(
           <View>

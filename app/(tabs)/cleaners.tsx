@@ -2,163 +2,114 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { C, S } from '../../constants/theme';
+import { CATEGORIES, TRADES, tradesIn } from '../../constants/trades';
 import { useApp } from '../../context/AppContext';
-import { TRADES, findTrade } from '../../constants/trades';
 
-export default function CleanersScreen() {
-  const { cleaners } = useApp();
+export default function ServicesTab() {
+  const { availableTrades, providersFor } = useApp();
   const [q, setQ] = useState('');
-  const [onlyAvail, setOnlyAvail] = useState(false);
-  const [needTeam, setNeedTeam]   = useState(1);
-  const [tradeFilter, setTrade]   = useState<string|null>(null);
-  const list = cleaners.filter(c =>
-    (c.name.toLowerCase().includes(q.toLowerCase()) || c.areas.some(a=>a.toLowerCase().includes(q.toLowerCase()))) &&
-    (!onlyAvail || c.available) &&
-    (((c as any).teamSize ?? 1) >= needTeam) &&
-    (!tradeFilter || ((c as any).categories || []).includes(tradeFilter))
-  );
 
-  // only offer filters for trades somebody actually covers
-  const activeTrades = TRADES.filter(t =>
-    cleaners.some(c => ((c as any).categories || []).includes(t.id)));
+  const live = TRADES.filter(t => availableTrades.includes(t.id));
+  const list = live.filter(t =>
+    !q || t.name.toLowerCase().includes(q.toLowerCase())
+       || t.desc.toLowerCase().includes(q.toLowerCase()));
+
+  const open = (t: any) =>
+    t.roadside ? router.push('/roadside') : router.push(`/providers?trade=${t.id}`);
+
+  const grouped = CATEGORIES
+    .map(cat => ({ cat, items: list.filter(t => t.category === cat.id) }))
+    .filter(g => g.items.length > 0);
+
   return (
     <ScrollView style={s.wrap} showsVerticalScrollIndicator={false}>
-      <Text style={s.heading}>Find a provider</Text>
-      <View style={s.searchRow}>
+      <Text style={s.heading}>All services</Text>
+      <Text style={s.sub}>
+        {live.length > 0
+          ? `${live.length} service${live.length===1?'':'s'} available in Malta right now`
+          : 'Nothing available yet — we\'re signing up the first providers'}
+      </Text>
+
+      {live.length > 0 && (
         <View style={s.searchBox}>
           <Text>🔍  </Text>
-          <TextInput style={s.searchInput} placeholder="Name or area..." placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
+          <TextInput style={s.searchInput} placeholder="Search services…"
+            placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
         </View>
-        <TouchableOpacity style={[s.filterBtn, onlyAvail&&s.filterBtnOn]} onPress={()=>setOnlyAvail(!onlyAvail)}>
-          <Text style={[s.filterTxt, onlyAvail&&s.filterTxtOn]}>Available</Text>
-        </TouchableOpacity>
-      </View>
-      {activeTrades.length > 1 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}
-          contentContainerStyle={s.tradeStrip} style={{maxHeight:46,marginBottom:12}}>
-          <TouchableOpacity style={[s.tradeChip, !tradeFilter&&s.tradeChipOn]}
-            onPress={()=>setTrade(null)}>
-            <Text style={[s.tradeChipTxt, !tradeFilter&&s.tradeChipTxtOn]}>All</Text>
-          </TouchableOpacity>
-          {activeTrades.map(t=>(
-            <TouchableOpacity key={t.id} style={[s.tradeChip, tradeFilter===t.id&&s.tradeChipOn]}
-              onPress={()=>setTrade(t.id)}>
-              <Text style={[s.tradeChipTxt, tradeFilter===t.id&&s.tradeChipTxtOn]}>
-                {t.icon}  {t.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
       )}
 
-      <View style={s.teamRow}>
-        <Text style={s.teamLbl}>Team size</Text>
-        <View style={s.teamChips}>
-          {[1,2,3].map(n=>(
-            <TouchableOpacity key={n} style={[s.teamChip, needTeam===n&&s.teamChipOn]}
-              onPress={()=>setNeedTeam(n)}>
-              <Text style={[s.teamChipTxt, needTeam===n&&s.teamChipTxtOn]}>
-                {n===1?'Any':`${n}+`}
-              </Text>
-            </TouchableOpacity>
-          ))}
+      {live.length === 0 ? (
+        <View style={s.emptyBox}>
+          <Text style={s.emptyIcon}>🚧</Text>
+          <Text style={s.emptyTitle}>We're just getting started</Text>
+          <Text style={s.emptyTxt}>
+            Tell us what you need and we'll message you when someone covers it.
+          </Text>
+          <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push('/request')}>
+            <Text style={s.emptyBtnTxt}>Tell us what you need</Text>
+          </TouchableOpacity>
         </View>
-      </View>
-
-      <Text style={s.count}>{list.length} provider{list.length===1?'':'s'} found</Text>
-      {list.map(c=>(
-        <TouchableOpacity key={c.id} style={s.card} onPress={()=>router.push(`/cleaner/${c.id}`)}>
-          <View style={s.cardTop}>
-            <View style={[s.avatar, {backgroundColor:c.color+'22'}]}>
-              <Text style={[s.initials, {color:c.color}]}>{c.initials}</Text>
-            </View>
-            <View style={{flex:1}}>
-              <View style={{flexDirection:'row',alignItems:'center',gap:8}}>
-                <Text style={s.name}>{c.name}</Text>
-                {c.verified && <View style={s.ver}><Text style={s.verTxt}>✓ Verified</Text></View>}
-              </View>
-              <View style={{flexDirection:'row',gap:8,alignItems:'center',marginTop:4}}>
-                <Text style={s.rating}>⭐ {c.rating}</Text>
-                <Text style={s.reviews}>({c.reviews})</Text>
-              </View>
-              <Text style={s.areas}>{c.areas.join(' · ')}</Text>
-              {((c as any).teamSize ?? 1) > 1 && (
-                <Text style={s.teamNote}>👥 Can send up to {(c as any).teamSize} cleaners</Text>
-              )}
-            </View>
-            <View style={s.rateBox}>
-              <Text style={s.rate}>€{c.rate}</Text>
-              <Text style={s.rateUnit}>/hr</Text>
-            </View>
-          </View>
-          <View style={s.tags}>
-            {c.specialties.map(sp=><View key={sp} style={s.tag}><Text style={s.tagTxt}>{sp}</Text></View>)}
-            <View style={[s.tag, c.available?s.tagAvail:s.tagBusy]}>
-              <Text style={[s.tagTxt, {color:c.available?C.green:C.muted}]}>{c.available?'● Available':'○ Busy'}</Text>
-            </View>
-          </View>
-          <View style={s.cardFooter}>
-            <TouchableOpacity style={s.viewBtn} onPress={()=>router.push(`/cleaner/${c.id}`)}>
-              <Text style={s.viewBtnTxt}>View Profile</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.bookBtn, !c.available&&s.bookBtnDis]}
-              onPress={()=>c.available&&router.push(`/booking?cleanerId=${c.id}&cleanerName=${encodeURIComponent(c.name)}`)}>
-              <Text style={s.bookBtnTxt}>{c.available?'Book →':'Unavailable'}</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
+      ) : grouped.map(({cat, items})=>(
+        <View key={cat.id}>
+          <Text style={s.groupTitle}>{cat.icon}  {cat.name}</Text>
+          {items.map(t=>{
+            const people = providersFor(t.id);
+            const from = people.length ? Math.min(...people.map(p=>p.rate)) : 0;
+            return (
+              <TouchableOpacity key={t.id} style={s.card} onPress={()=>open(t)}>
+                <Text style={s.cardIcon}>{t.icon}</Text>
+                <View style={{flex:1}}>
+                  <Text style={s.cardName}>{t.name}</Text>
+                  <Text style={s.cardDesc}>{t.desc}</Text>
+                  <Text style={[s.cardMeta,{color:cat.colour}]}>
+                    {people.length} {people.length===1?'provider':'providers'}
+                    {t.pricing === 'fixed' ? ' · fixed price' : ` · from €${from}/hr`}
+                  </Text>
+                </View>
+                <Text style={s.cardGo}>›</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       ))}
-      <View style={{height:32}} />
+
+      {live.length > 0 && (
+        <TouchableOpacity style={s.requestRow} onPress={()=>router.push('/request')}>
+          <Text style={s.requestIcon}>💬</Text>
+          <View style={{flex:1}}>
+            <Text style={s.requestTitle}>Can't find what you need?</Text>
+            <Text style={s.requestTxt}>Tell us and we'll find someone</Text>
+          </View>
+          <Text style={s.cardGo}>›</Text>
+        </TouchableOpacity>
+      )}
+
+      <View style={{height:32}}/>
     </ScrollView>
   );
 }
 
 const s = StyleSheet.create({
   wrap:{flex:1,backgroundColor:C.bg},
-  heading:{fontSize:28,fontWeight:'800',color:C.dark,paddingHorizontal:20,paddingTop:60,paddingBottom:16},
-  searchRow:{flexDirection:'row',paddingHorizontal:20,gap:10,marginBottom:12},
-  searchBox:{flex:1,flexDirection:'row',alignItems:'center',backgroundColor:C.white,borderRadius:14,paddingHorizontal:14,borderWidth:1,borderColor:C.border,...S.sm},
+  heading:{fontSize:28,fontWeight:'800',color:C.dark,paddingHorizontal:20,paddingTop:60},
+  sub:{fontSize:13,color:C.muted,paddingHorizontal:20,marginTop:4,marginBottom:16,lineHeight:18},
+  searchBox:{flexDirection:'row',alignItems:'center',marginHorizontal:20,backgroundColor:C.white,borderRadius:14,paddingHorizontal:14,borderWidth:1,borderColor:C.border,marginBottom:18,...S.sm},
   searchInput:{flex:1,paddingVertical:13,fontSize:14,color:C.text},
-  filterBtn:{paddingHorizontal:14,justifyContent:'center',borderRadius:14,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white},
-  filterBtnOn:{backgroundColor:C.primaryLt,borderColor:C.primary},
-  filterTxt:{fontSize:13,color:C.muted,fontWeight:'600'},
-  filterTxtOn:{color:C.primary},
-  teamRow:{flexDirection:'row',alignItems:'center',paddingHorizontal:20,gap:12,marginBottom:12},
-  teamLbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5},
-  teamChips:{flexDirection:'row',gap:6},
-  teamChip:{paddingHorizontal:14,paddingVertical:7,borderRadius:20,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border},
-  teamChipOn:{backgroundColor:C.primary,borderColor:C.primary},
-  teamChipTxt:{fontSize:12,fontWeight:'700',color:C.muted},
-  teamChipTxtOn:{color:C.white},
-  teamNote:{fontSize:11,color:C.accent,fontWeight:'700',marginTop:3},
-  tradeStrip:{gap:8,paddingHorizontal:20},
-  tradeChip:{paddingHorizontal:14,paddingVertical:9,borderRadius:20,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border},
-  tradeChipOn:{backgroundColor:C.primary,borderColor:C.primary},
-  tradeChipTxt:{fontSize:12,fontWeight:'700',color:C.muted},
-  tradeChipTxtOn:{color:C.white},
-  count:{fontSize:13,color:C.muted,paddingHorizontal:20,marginBottom:12},
-  card:{marginHorizontal:20,marginBottom:14,backgroundColor:C.white,borderRadius:20,padding:16,...S.sm,borderWidth:1,borderColor:C.border},
-  cardTop:{flexDirection:'row',gap:12,marginBottom:12},
-  avatar:{width:58,height:58,borderRadius:29,alignItems:'center',justifyContent:'center'},
-  initials:{fontSize:20,fontWeight:'800'},
-  name:{fontSize:16,fontWeight:'700',color:C.dark},
-  ver:{backgroundColor:C.greenLt,paddingHorizontal:8,paddingVertical:3,borderRadius:8},
-  verTxt:{fontSize:11,color:C.green,fontWeight:'700'},
-  rating:{fontSize:13,fontWeight:'600'},
-  reviews:{fontSize:12,color:C.muted},
-  areas:{fontSize:12,color:C.muted,marginTop:4},
-  rateBox:{alignItems:'flex-end'},
-  rate:{fontSize:22,fontWeight:'800',color:C.primary},
-  rateUnit:{fontSize:12,color:C.muted},
-  tags:{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:14},
-  tag:{backgroundColor:C.bgAlt,paddingHorizontal:10,paddingVertical:4,borderRadius:20,borderWidth:1,borderColor:C.border},
-  tagAvail:{backgroundColor:C.greenLt,borderColor:C.greenLt},
-  tagBusy:{backgroundColor:C.bgAlt},
-  tagTxt:{fontSize:11,color:C.muted,fontWeight:'600'},
-  cardFooter:{flexDirection:'row',gap:10},
-  viewBtn:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:12,paddingVertical:11,alignItems:'center'},
-  viewBtnTxt:{fontSize:14,fontWeight:'600',color:C.muted},
-  bookBtn:{flex:1,backgroundColor:C.primary,borderRadius:12,paddingVertical:11,alignItems:'center'},
-  bookBtnDis:{backgroundColor:C.bgAlt},
-  bookBtnTxt:{fontSize:14,fontWeight:'700',color:C.white},
+  groupTitle:{fontSize:12,fontWeight:'800',color:C.muted,textTransform:'uppercase',letterSpacing:0.7,paddingHorizontal:20,marginBottom:10,marginTop:8},
+  card:{flexDirection:'row',alignItems:'center',gap:14,marginHorizontal:20,marginBottom:10,backgroundColor:C.white,borderRadius:16,padding:15,borderWidth:1,borderColor:C.border,...S.sm},
+  cardIcon:{fontSize:26},
+  cardName:{fontSize:15,fontWeight:'700',color:C.dark},
+  cardDesc:{fontSize:12,color:C.muted,marginTop:2,lineHeight:17},
+  cardMeta:{fontSize:11,fontWeight:'700',marginTop:5},
+  cardGo:{fontSize:24,color:C.border},
+  emptyBox:{marginHorizontal:20,backgroundColor:C.white,borderRadius:20,padding:30,alignItems:'center',gap:10,borderWidth:1,borderColor:C.border},
+  emptyIcon:{fontSize:44},
+  emptyTitle:{fontSize:18,fontWeight:'800',color:C.dark},
+  emptyTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
+  emptyBtn:{backgroundColor:C.primary,borderRadius:14,paddingVertical:13,paddingHorizontal:24,marginTop:4},
+  emptyBtnTxt:{color:C.white,fontSize:14,fontWeight:'700'},
+  requestRow:{flexDirection:'row',alignItems:'center',gap:14,marginHorizontal:20,marginTop:8,backgroundColor:C.bgAlt,borderRadius:16,padding:15,borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
+  requestIcon:{fontSize:22},
+  requestTitle:{fontSize:14,fontWeight:'800',color:C.dark},
+  requestTxt:{fontSize:12,color:C.muted,marginTop:2},
 });

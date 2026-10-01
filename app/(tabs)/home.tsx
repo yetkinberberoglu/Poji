@@ -1,11 +1,11 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { C, S } from '../../constants/theme';
-import { CATEGORIES, tradesIn, liveCount } from '../../constants/trades';
+import { CATEGORIES, tradesIn } from '../../constants/trades';
 import { useApp } from '../../context/AppContext';
 
 export default function Home() {
-  const { userName, bookings } = useApp();
+  const { userName, bookings, availableTrades, providersFor } = useApp();
 
   const active = bookings.filter(b =>
     ['pending','pending_pool','accepted','en_route','arrived','in_progress','awaiting_confirmation']
@@ -37,9 +37,31 @@ export default function Home() {
         </TouchableOpacity>
       )}
 
-      {CATEGORIES.map(cat=>{
-        const total = tradesIn(cat.id).length;
-        const live  = liveCount(cat.id);
+      {(() => {
+        const served = CATEGORIES.filter(cat =>
+          tradesIn(cat.id).some(t => availableTrades.includes(t.id)));
+
+        if (served.length === 0) {
+          return (
+            <View style={s.emptyState}>
+              <Text style={s.emptyIcon}>🚧</Text>
+              <Text style={s.emptyTitle}>We're just getting started</Text>
+              <Text style={s.emptyTxt}>
+                Poji is signing up its first providers in Malta right now.
+                Tell us what you need and we'll message you the moment someone covers it.
+              </Text>
+              <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push('/request')}>
+                <Text style={s.emptyBtnTxt}>Tell us what you need</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+
+        return served.map(cat=>{
+        const liveTrades = tradesIn(cat.id).filter(t => availableTrades.includes(t.id));
+        const people = new Set(
+          liveTrades.flatMap(t => providersFor(t.id).map(p => p.id))
+        ).size;
         return (
           <TouchableOpacity key={cat.id} style={s.catCard}
             onPress={()=>router.push(`/services?category=${cat.id}`)}>
@@ -53,15 +75,30 @@ export default function Home() {
                   <View style={s.urgentTag}><Text style={s.urgentTxt}>⚡ Same-day</Text></View>
                 )}
               </View>
-              <Text style={s.catDesc}>{cat.desc}</Text>
+              <Text style={s.catDesc}>
+                {liveTrades.map(t=>t.name).slice(0,3).join(' · ')}
+                {liveTrades.length > 3 ? ` +${liveTrades.length - 3}` : ''}
+              </Text>
               <Text style={[s.catCount,{color:cat.colour}]}>
-                {live > 0 ? `${live} of ${total} available now` : `${total} services · coming soon`}
+                {people} {people===1?'provider':'providers'} available
               </Text>
             </View>
             <Text style={s.catGo}>›</Text>
           </TouchableOpacity>
         );
-      })}
+        });
+      })()}
+
+      <TouchableOpacity style={s.requestRow} onPress={()=>router.push('/request')}>
+        <Text style={s.requestIcon}>💬</Text>
+        <View style={{flex:1}}>
+          <Text style={s.requestTitle}>Need something else?</Text>
+          <Text style={s.requestTxt}>
+            Tell us the trade and we'll find someone for you
+          </Text>
+        </View>
+        <Text style={s.catGo}>›</Text>
+      </TouchableOpacity>
 
       <View style={s.stepsCard}>
         <Text style={s.stepsTitle}>How Poji works</Text>
@@ -110,6 +147,16 @@ const s = StyleSheet.create({
   urgentTag:{backgroundColor:C.amberLt,paddingHorizontal:8,paddingVertical:3,borderRadius:10,borderWidth:1,borderColor:'#FDE68A'},
   urgentTxt:{fontSize:10,fontWeight:'800',color:C.amber},
 
+  emptyState:{marginHorizontal:20,backgroundColor:C.white,borderRadius:20,padding:28,alignItems:'center',gap:10,borderWidth:1,borderColor:C.border,...S.sm},
+  emptyIcon:{fontSize:44},
+  emptyTitle:{fontSize:18,fontWeight:'800',color:C.dark,textAlign:'center'},
+  emptyTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
+  emptyBtn:{backgroundColor:C.primary,borderRadius:14,paddingVertical:14,paddingHorizontal:26,marginTop:6},
+  emptyBtnTxt:{color:C.white,fontSize:14,fontWeight:'700'},
+  requestRow:{flexDirection:'row',alignItems:'center',gap:14,marginHorizontal:20,marginBottom:12,backgroundColor:C.bgAlt,borderRadius:18,padding:16,borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
+  requestIcon:{fontSize:24},
+  requestTitle:{fontSize:15,fontWeight:'800',color:C.dark},
+  requestTxt:{fontSize:12,color:C.muted,marginTop:3,lineHeight:17},
   stepsCard:{marginHorizontal:20,backgroundColor:C.white,borderRadius:18,padding:18,marginTop:16,borderWidth:1,borderColor:C.border,gap:14,...S.sm},
   stepsTitle:{fontSize:16,fontWeight:'800',color:C.dark,marginBottom:2},
   stepRow:{flexDirection:'row',gap:12,alignItems:'flex-start'},

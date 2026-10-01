@@ -10,6 +10,7 @@ export type ServiceType = {
   callout_fee?: number | null;
   typical_minutes?: number | null;
   needs_location?: boolean;
+  trade_id?: string | null;
 };
 
 export type ServiceExtra = {
@@ -25,9 +26,15 @@ export type ServiceTask = {
   id: string; service_type_id: string; area: string; task: string; sort_order: number;
 };
 
-export async function loadServiceTypes(category?: string): Promise<ServiceType[]> {
+export async function loadServiceTypes(opts?: {
+  category?: string;
+  trade?: string;
+  trades?: string[];
+}): Promise<ServiceType[]> {
   let q = supabase.from('service_types').select('*').eq('active', true);
-  if (category) q = q.eq('category', category);
+  if (opts?.trade)       q = q.eq('trade_id', opts.trade);
+  else if (opts?.trades?.length) q = q.in('trade_id', opts.trades);
+  else if (opts?.category)       q = q.eq('category', opts.category);
   const { data, error } = await q.order('sort_order');
   if (error) { console.log('loadServiceTypes:', error.message); return []; }
   return data || [];

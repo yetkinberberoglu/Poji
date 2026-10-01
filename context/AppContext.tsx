@@ -55,6 +55,8 @@ interface Ctx {
   bookings: Booking[];
   cleaners: Cleaner[];
   providers: Cleaner[];
+  availableTrades: string[];
+  providersFor: (tradeId: string) => Cleaner[];
   addBooking: (
     b: Omit<Booking,'id'|'createdAt'>,
     meta?: { multiplier?: number; suppliesByCleaner?: boolean; hourlyRate?: number;
@@ -532,9 +534,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const getCleanerById = (id: string) => cleaners.find(c => c.id === id);
 
+  /** Trades with at least one approved provider signed up */
+  const availableTrades = Array.from(new Set(
+    cleaners.flatMap(c => (c as any).categories || [])
+  ));
+
+  const providersFor = (tradeId: string) =>
+    cleaners.filter(c => ((c as any).categories || []).includes(tradeId));
+
   return (
     <AppContext.Provider value={{
-      bookings, cleaners, providers: cleaners, addBooking, updateStatus,
+      bookings, cleaners, providers: cleaners, availableTrades, providersFor,
+      addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
       releaseToPool, reassignCleaner, acceptJob,
       loadBookings, getCleanerById,

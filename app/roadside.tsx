@@ -39,7 +39,7 @@ export default function Roadside() {
 
   useEffect(() => {
     (async () => {
-      const t = await loadServiceTypes('vehicle');
+      const t = await loadServiceTypes({ category: 'vehicle' });
       setTypes(t);
       setLC(false);
     })();

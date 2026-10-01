@@ -55,6 +55,7 @@ export default function RootLayout() {
         <Stack.Screen name="admin" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="services" />
+        <Stack.Screen name="request" />
         <Stack.Screen name="providers" />
         <Stack.Screen name="booking" />
         <Stack.Screen name="roadside" />

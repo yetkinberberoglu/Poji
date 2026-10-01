@@ -2,6 +2,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { router, useLocalSearchParams } from 'expo-router';
 import { C, S } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
+import { findTrade } from '../../constants/trades';
 
 const REVIEWS = [
   {author:'Sarah K.',rating:5,text:'Absolutely brilliant — punctual, thorough, left everything spotless!',date:'2 days ago'},
@@ -10,7 +11,7 @@ const REVIEWS = [
 ];
 
 export default function CleanerProfile() {
-  const { id } = useLocalSearchParams<{id:string}>();
+  const { id, trade } = useLocalSearchParams<{id:string; trade?:string}>();
   const { cleaners } = useApp();
   const c = cleaners.find(x=>x.id===id) || cleaners[0];
   if (!c) return null;
@@ -50,6 +51,22 @@ export default function CleanerProfile() {
         </View>
         <Text style={s.sectionTitle}>About</Text>
         <Text style={s.bio}>{c.bio}</Text>
+        {((c as any).categories || []).length > 0 && (
+          <>
+            <Text style={s.sectionTitle}>Trades</Text>
+            <View style={s.tradeWrap}>
+              {((c as any).categories || []).map((id:string)=>{
+                const t = findTrade(id);
+                return (
+                  <View key={id} style={s.tradePill}>
+                    <Text style={s.tradePillTxt}>{t?.icon || '•'}  {t?.name || id}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        )}
+
         <Text style={s.sectionTitle}>Specialties</Text>
         <View style={s.specialties}>
           {c.specialties.map(x=><View key={x} style={s.specialty}><Text style={s.specialtyTxt}>✓ {x}</Text></View>)}
@@ -91,7 +108,7 @@ export default function CleanerProfile() {
         </View>
         <TouchableOpacity
           style={[s.bookBtn, !c.available&&s.bookBtnDis]}
-          onPress={()=>c.available&&router.push(`/booking?cleanerId=${c.id}&cleanerName=${encodeURIComponent(c.name)}`)}
+          onPress={()=>c.available&&router.push(`/booking?cleanerId=${c.id}&cleanerName=${encodeURIComponent(c.name)}${trade?`&trade=${trade}`:''}`)}
         >
           <Text style={s.bookBtnTxt}>
             {c.available?`Book ${c.name.split(' ')[0]}  →`:'Currently Unavailable'}
@@ -130,6 +147,9 @@ const s = StyleSheet.create({
   badgeTxt:{fontSize:12,color:C.white,fontWeight:'600'},
   sectionTitle:{fontSize:16,fontWeight:'700',color:C.dark,marginBottom:10,marginTop:6},
   bio:{fontSize:14,color:C.text,lineHeight:23,marginBottom:16},
+  tradeWrap:{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:16},
+  tradePill:{backgroundColor:C.primaryLt,paddingHorizontal:12,paddingVertical:7,borderRadius:20,borderWidth:1,borderColor:C.border},
+  tradePillTxt:{fontSize:12,color:C.primary,fontWeight:'700'},
   specialties:{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:16},
   specialty:{backgroundColor:C.greenLt,paddingHorizontal:12,paddingVertical:6,borderRadius:20},
   specialtyTxt:{fontSize:12,color:C.green,fontWeight:'600'},

@@ -60,7 +60,7 @@ const fmtH = (h:number) => h % 1 === 0 ? `${h}h` : `${Math.floor(h)}h 30m`;
 
 export default function BookingScreen() {
   const { addBooking, cleaners } = useApp();
-  const params = useLocalSearchParams<{cleanerId?: string; cleanerName?: string}>();
+  const params = useLocalSearchParams<{cleanerId?: string; cleanerName?: string; trade?: string}>();
 
   const [step, setStep]    = useState(0);
   const [loading, setLoad] = useState(false);
@@ -70,7 +70,7 @@ export default function BookingScreen() {
   const [sizes, setSizes]   = useState<PropertySize[]>([]);
   const [catLoading, setCatLoading] = useState(true);
 
-  const [svc, setSvc]             = useState('standard');
+  const [svc, setSvc]             = useState<string>('');
   const [chosenExtras, setChosen] = useState<string[]>([]);
   const [suppliesByCleaner, setSupplies] = useState(false);
   const [size, setSize]           = useState('1bed');
@@ -98,7 +98,9 @@ export default function BookingScreen() {
   const sizeFactor  = sizeObj?.factor ?? 1;
   const svcMinHours = svcType?.min_hours ?? 3;
 
-  const selectedExtras = extras.filter(e => chosenExtras.includes(e.id));
+  // extras only make sense for hourly home services
+  const showExtras = !!svcType && (svcType.pricing_model ?? 'hourly') === 'hourly';
+  const selectedExtras = showExtras ? extras.filter(e => chosenExtras.includes(e.id)) : [];
   const extraMinutes   = selectedExtras.reduce((s,e)=>s+Number(e.extra_minutes),0);
 
   // cleaners who can send this many people
@@ -137,13 +139,22 @@ export default function BookingScreen() {
 
   useEffect(() => {
     (async () => {
+      // Which trade are we booking? Either passed in, or taken from the
+      // provider's own registered trades.
+      const chosen = cleaners.find(c => c.id === (params.cleanerId || ''));
+      const theirTrades = (chosen as any)?.categories || [];
+      const tradeFilter = params.trade
+        ? { trade: params.trade }
+        : theirTrades.length ? { trades: theirTrades } : {};
+
       const [t, e, z] = await Promise.all([
-        loadServiceTypes(), loadServiceExtras(), loadPropertySizes(),
+        loadServiceTypes(tradeFilter), loadServiceExtras(), loadPropertySizes(),
       ]);
       setTypes(t); setExtras(e); setSizes(z);
+      if (t.length && !t.find(x => x.id === svc)) setSvc(t[0].id);
       setCatLoading(false);
     })();
-  }, []);
+  }, [params.cleanerId, params.trade, cleaners.length]);
 
   useEffect(() => {
     (async () => {
@@ -247,7 +258,19 @@ export default function BookingScreen() {
               <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
             ) : (
               <>
-                <Text style={s.stepIntro}>What kind of clean do you need?</Text>
+                <Text style={s.stepIntro}>
+                  What do you need{cleaner ? ` from ${cleaner.name.split(' ')[0]}` : ''}?
+                </Text>
+                {types.length === 0 && (
+                  <View style={s.noSvcBox}>
+                    <Text style={s.noSvcIcon}>🤔</Text>
+                    <Text style={s.noSvcTitle}>No services listed yet</Text>
+                    <Text style={s.noSvcTxt}>
+                      This provider hasn't set up their service list. Try another
+                      provider, or let us know and we'll chase them.
+                    </Text>
+                  </View>
+                )}
                 {types.map(t=>{
                   const on = svc===t.id;
                   return (
@@ -333,7 +356,27 @@ export default function BookingScreen() {
         )}
 
         {/* ── 2 · EXTRAS ── */}
-        {step===2 && (
+        {step===2 && !showExtras && (
+          <View style={s.step}>
+            <Text style={s.stepIntro}>Materials</Text>
+            <Text style={s.hint}>
+              Who supplies what's needed for the job?
+            </Text>
+            <View style={s.supplyRow}>
+              {[{k:false,l:'I provide them',d:'Nothing added'},
+                {k:true, l:'Provider brings them',d:'Small hourly surcharge'}].map(o=>(
+                <TouchableOpacity key={String(o.k)}
+                  style={[s.supplyCard, suppliesByCleaner===o.k&&s.supplyCardOn]}
+                  onPress={()=>setSupplies(o.k)}>
+                  <Text style={[s.supplyLbl, suppliesByCleaner===o.k&&s.supplyLblOn]}>{o.l}</Text>
+                  <Text style={s.supplyDesc}>{o.d}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {step===2 && showExtras && (
           <View style={s.step}>
             <Text style={s.stepIntro}>Anything extra?</Text>
             <Text style={s.hint}>
@@ -770,6 +813,10 @@ const s = StyleSheet.create({
   chipSub:{fontSize:10,color:C.muted,marginTop:2},
   teamNote:{fontSize:12,color:C.accent,fontWeight:'700',marginTop:10,lineHeight:17},
 
+  noSvcBox:{backgroundColor:C.white,borderRadius:16,padding:26,alignItems:'center',gap:8,borderWidth:1,borderColor:C.border},
+  noSvcIcon:{fontSize:38},
+  noSvcTitle:{fontSize:16,fontWeight:'800',color:C.dark},
+  noSvcTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
   svcCard:{padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10},
   svcCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
   svcTop:{flexDirection:'row',gap:12,alignItems:'flex-start'},
