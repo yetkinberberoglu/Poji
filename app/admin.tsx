@@ -380,7 +380,8 @@ export default function Admin() {
                   ]}/>
                   <View style={st.docRow}>
                     {[['ID front',a.id_front_url],['ID back',a.id_back_url],
-                      ['Selfie',a.selfie_url],['Work permit',a.work_permit_url]]
+                      ['Selfie',a.selfie_url],['Profile photo',a.profile_photo_url],
+                      ['Work permit',a.work_permit_url],['Insurance',a.insurance_doc_url]]
                       .filter(([_,u])=>!!u).map(([l,u])=>(
                       <TouchableOpacity key={l} style={st.docBtn} onPress={()=>viewDoc(u)}>
                         <Text style={st.docTxt}>📄  {l}</Text>
@@ -393,6 +394,13 @@ export default function Admin() {
                     ['Team',a.team_type], ['Team size',String(a.team_size||1)],
                     ['Company',a.company_name], ['VAT',a.vat_number],
                   ]}/>
+                  <Detail title="Insurance" rows={[
+                    ['Has cover', a.has_insurance ? 'Yes' : 'No'],
+                    ['Insurer',   a.insurance_provider],
+                    ['Policy',    a.insurance_policy_no],
+                    ['Expires',   a.insurance_expiry],
+                  ]}/>
+
                   <Detail title="Service" rows={[
                     ['Trades', (a.categories||[]).map((id:string)=>
                       findTrade(id)?.name || id).join(', ') || '—'],

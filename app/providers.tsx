@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { C, S } from '../constants/theme';
 import { findTrade } from '../constants/trades';
 import { useApp } from '../context/AppContext';
+import Avatar from '../components/Avatar';
 
 /** "Electrician" → "Electricians near you" */
 const plural = (name: string) => {
@@ -73,13 +74,12 @@ export default function Providers() {
       ) : list.map(p=>(
         <TouchableOpacity key={p.id} style={s.card} onPress={()=>router.push(`/cleaner/${p.id}?trade=${trade}`)}>
           <View style={s.cardTop}>
-            <View style={[s.avatar,{backgroundColor:p.color+'22'}]}>
-              <Text style={[s.initials,{color:p.color}]}>{p.initials}</Text>
-            </View>
+            <Avatar photoUrl={(p as any).photoUrl} initials={p.initials} color={p.color} size={56} />
             <View style={{flex:1}}>
               <View style={{flexDirection:'row',alignItems:'center',gap:8}}>
                 <Text style={s.name}>{p.name}</Text>
                 {p.verified && <View style={s.ver}><Text style={s.verTxt}>✓ Verified</Text></View>}
+                {(p as any).insured && <View style={s.ins}><Text style={s.insTxt}>🛡 Insured</Text></View>}
               </View>
               <View style={{flexDirection:'row',gap:8,alignItems:'center',marginTop:4}}>
                 <Text style={s.rating}>⭐ {p.rating}</Text>
@@ -148,6 +148,8 @@ const s = StyleSheet.create({
   name:{fontSize:16,fontWeight:'700',color:C.dark},
   ver:{backgroundColor:C.greenLt,paddingHorizontal:8,paddingVertical:3,borderRadius:8},
   verTxt:{fontSize:11,color:C.green,fontWeight:'700'},
+  ins:{backgroundColor:C.primaryLt,paddingHorizontal:8,paddingVertical:3,borderRadius:8},
+  insTxt:{fontSize:11,color:C.primary,fontWeight:'700'},
   rating:{fontSize:13,fontWeight:'600'},
   reviews:{fontSize:12,color:C.muted},
   areas:{fontSize:12,color:C.muted,marginTop:4},

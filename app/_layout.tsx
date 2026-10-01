@@ -10,6 +10,9 @@ async function redirect() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) { router.replace('/auth'); return; }
 
+  // Email has to be confirmed before anything else
+  if (!user.email_confirmed_at) { router.replace('/verify-email'); return; }
+
   const { data: profile, error } = await supabase
     .from('profiles').select('role').eq('id', user.id).maybeSingle();
 
@@ -21,8 +24,11 @@ async function redirect() {
   if (role === 'cleaner') {
     const { data: app } = await supabase
       .from('cleaner_profiles').select('verification_status').eq('id', user.id).maybeSingle();
-    if (!app || app.verification_status !== 'approved') router.replace('/onboarding');
-    else router.replace('/provider');
+    // Only push them back into the form when there's nothing submitted yet,
+    // or we sent it back for changes. Otherwise the dashboard shows their status.
+    const st = app?.verification_status;
+    if (!app || st === 'draft' || st === 'rejected') router.replace('/onboarding');
+    else router.replace('/(provider)/jobs');
     return;
   }
 
@@ -50,6 +56,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="auth" />
+        <Stack.Screen name="verify-email" />
         <Stack.Screen name="client-setup" />
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="admin" />
@@ -60,6 +67,7 @@ export default function RootLayout() {
         <Stack.Screen name="booking" />
         <Stack.Screen name="roadside" />
         <Stack.Screen name="cleaner/[id]" />
+        <Stack.Screen name="(provider)" />
         <Stack.Screen name="provider" />
         <Stack.Screen name="review" />
         <Stack.Screen name="legal" />

@@ -49,6 +49,8 @@ export type Cleaner = {
   minHours?: number; bringsOwnSupplies?: boolean;
   teamType?: string; teamSize?: number;
   categories?: string[]; acceptsUrgent?: boolean; serviceRadiusKm?: number;
+  photoPath?: string | null; photoUrl?: string | null;
+  insured?: boolean; coversAllMalta?: boolean; coversAllGozo?: boolean;
 };
 
 interface Ctx {
@@ -113,7 +115,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         rating: 5.0,
         reviews: 0,
         rate: Number(c.hourly_rate) || 15,
-        available: true,
+        available: c.available !== false,
         verified: true,
         areas: c.service_areas && c.service_areas.length ? c.service_areas : ['Malta'],
         specialties: c.specialties && c.specialties.length ? c.specialties : ['Standard'],
@@ -132,10 +134,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         categories: (c.categories && c.categories.length) ? c.categories : ['cleaning'],
         acceptsUrgent: !!c.accepts_urgent,
         serviceRadiusKm: Number(c.service_radius_km) || 15,
+        photoPath: c.profile_photo_url || null,
+        photoUrl: null as string | null,
+        insured: !!c.has_insurance,
+        coversAllMalta: !!c.covers_all_malta,
+        coversAllGozo: !!c.covers_all_gozo,
       } as any;
     });
 
     setCleaners(list);
+
+    // Profile photos sit in a private bucket — sign them so clients can see them
+    const withPhotos = list.filter((c:any)=>c.photoPath);
+    if (withPhotos.length) {
+      const { data: signed } = await supabase.storage
+        .from('verification-docs')
+        .createSignedUrls(withPhotos.map((c:any)=>c.photoPath), 60 * 60 * 6);
+      if (signed) {
+        const byPath: Record<string,string> = {};
+        signed.forEach((r:any, i:number) => {
+          if (r.signedUrl) byPath[withPhotos[i].photoPath] = r.signedUrl;
+        });
+        setCleaners(prev => prev.map((c:any) =>
+          c.photoPath && byPath[c.photoPath] ? { ...c, photoUrl: byPath[c.photoPath] } : c));
+      }
+    }
   };
 
   const loadUser = async () => {

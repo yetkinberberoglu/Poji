@@ -39,7 +39,7 @@ export default function Auth() {
       await supabase.from('profiles').upsert({ id: data.user.id, full_name: fullName, role });
     }
     setLoading(false);
-    setSuccess('Account created! You can now log in.');
+    setSuccess('Account created — check your email for the confirmation link.');
     setMode('login');
   };
 

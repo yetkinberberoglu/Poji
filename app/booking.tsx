@@ -6,6 +6,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
 import { useApp } from '../context/AppContext';
+import Avatar from '../components/Avatar';
 import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
@@ -498,13 +499,12 @@ export default function BookingScreen() {
               return (
                 <TouchableOpacity key={c.id} style={[s.clCard, on&&s.clCardOn]}
                   onPress={()=>setPicked(c.id)}>
-                  <View style={[s.clAv,{backgroundColor:c.color+'22'}]}>
-                    <Text style={[s.clIn,{color:c.color}]}>{c.initials}</Text>
-                  </View>
+                  <Avatar photoUrl={(c as any).photoUrl} initials={c.initials} color={c.color} size={50} />
                   <View style={{flex:1}}>
                     <View style={s.clNameRow}>
                       <Text style={s.clName}>{c.name}</Text>
                       {c.verified && <View style={s.verBadge}><Text style={s.verTxt}>✓</Text></View>}
+                      {(c as any).insured && <Text style={s.insDot}>🛡</Text>}
                     </View>
                     <Text style={s.clMeta}>
                       ⭐ {c.rating} · €{c.rate}/hr · {teamSizeOf(c)===1 ? 'solo' : `team of ${teamSizeOf(c)}`}
@@ -632,9 +632,7 @@ export default function BookingScreen() {
             <Text style={s.confirmTitle}>Booking Summary</Text>
 
             <View style={s.cleanerCard}>
-              <View style={[s.cleanerAv, {backgroundColor:cleaner.color+'22'}]}>
-                <Text style={[s.cleanerIn, {color:cleaner.color}]}>{cleaner.initials}</Text>
-              </View>
+              <Avatar photoUrl={(cleaner as any).photoUrl} initials={cleaner.initials} color={cleaner.color} size={52} />
               <View style={{flex:1}}>
                 <Text style={s.cleanerName}>{cleaner.name}</Text>
                 <Text style={s.cleanerSub}>€{baseRate}/hr base · {cleaner.areas?.[0]||'Malta'}</Text>
@@ -871,6 +869,7 @@ const s = StyleSheet.create({
   clName:{fontSize:15,fontWeight:'700',color:C.dark},
   verBadge:{backgroundColor:C.greenLt,width:19,height:19,borderRadius:10,alignItems:'center',justifyContent:'center'},
   verTxt:{fontSize:10,color:C.green,fontWeight:'700'},
+  insDot:{fontSize:12},
   clMeta:{fontSize:12,color:C.muted,marginTop:3},
   clAreas:{fontSize:11,color:C.muted,marginTop:2},
   clTotal:{fontSize:20,fontWeight:'800',color:C.dark},

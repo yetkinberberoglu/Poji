@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { C, S } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
 import { findTrade } from '../../constants/trades';
+import Avatar from '../../components/Avatar';
 
 const REVIEWS = [
   {author:'Sarah K.',rating:5,text:'Absolutely brilliant — punctual, thorough, left everything spotless!',date:'2 days ago'},
@@ -22,8 +23,8 @@ export default function CleanerProfile() {
         <Text style={s.backTxt}>← Back</Text>
       </TouchableOpacity>
       <View style={s.hero}>
-        <View style={[s.avatar,{backgroundColor:c.color+'22'}]}>
-          <Text style={[s.initials,{color:c.color}]}>{c.initials}</Text>
+        <View style={s.avatarShadow}>
+          <Avatar photoUrl={(c as any).photoUrl} initials={c.initials} color={c.color} size={104} />
         </View>
         <Text style={s.name}>{c.name}</Text>
         <View style={s.ratingRow}>
@@ -32,7 +33,10 @@ export default function CleanerProfile() {
           <Text style={s.dot}>·</Text>
           <Text style={s.completion}>{c.completionRate}% completion</Text>
         </View>
-        {c.verified && <View style={s.verBadge}><Text style={s.verTxt}>✓ ID Verified by Poji</Text></View>}
+        <View style={s.badgeRow}>
+          {c.verified && <View style={s.verBadge}><Text style={s.verTxt}>✓ ID verified</Text></View>}
+          {(c as any).insured && <View style={s.insBadge}><Text style={s.insTxt}>🛡 Insured</Text></View>}
+        </View>
         <View style={s.availRow}>
           <View style={[s.availDot,{backgroundColor:c.available?C.green:C.amber}]}/>
           <Text style={[s.availTxt,{color:c.available?C.green:C.amber}]}>
@@ -132,6 +136,10 @@ const s = StyleSheet.create({
   reviews:{fontSize:13,color:C.muted},
   dot:{color:C.muted},
   completion:{fontSize:13,color:C.green,fontWeight:'600'},
+  avatarShadow:{marginBottom:14,borderRadius:52,...S.sm},
+  badgeRow:{flexDirection:'row',gap:8,marginBottom:10,flexWrap:'wrap',justifyContent:'center'},
+  insBadge:{backgroundColor:C.primaryLt,paddingHorizontal:12,paddingVertical:6,borderRadius:20},
+  insTxt:{fontSize:12,color:C.primary,fontWeight:'700'},
   verBadge:{backgroundColor:C.greenLt,paddingHorizontal:14,paddingVertical:6,borderRadius:20,marginBottom:10},
   verTxt:{fontSize:13,color:C.green,fontWeight:'700'},
   availRow:{flexDirection:'row',alignItems:'center',gap:8},

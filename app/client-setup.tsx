@@ -5,9 +5,11 @@ import {
 import { router } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
+import { MALTA_LOCALITIES } from '../constants/malta';
 import { supabase } from '../lib/supabase';
-
-const LOCALITIES = ['Sliema',"St. Julian's",'Valletta','Gzira','Msida','Birkirkara','Attard','Mosta','Naxxar','Qormi','Paola','Marsaskala','Mellieha','Swieqi','Pieta','Gozo'];
+import PhoneVerify from '../components/PhoneVerify';
+import Picker from '../components/Picker';
+import { validatePhone } from '../constants/malta';
 
 export default function ClientSetup() {
   const [step, setStep]       = useState(0);
@@ -18,10 +20,16 @@ export default function ClientSetup() {
   const [f, setF] = useState<any>({
     first_name:'', last_name:'', phone:'',
     default_address:'', default_locality:'',
-    whatsapp_opt_in:true,
+    whatsapp_opt_in:true, phone_verified:false,
   });
 
-  const set = (k:string, v:any) => { setF((p:any)=>({...p,[k]:v})); setMissing([]); setError(''); };
+  const set = (k:string, v:any) => {
+    setF((p:any)=>({
+      ...p, [k]: v,
+      ...(k === 'phone' ? { phone_verified: false } : {}),
+    }));
+    setMissing([]); setError('');
+  };
 
   useEffect(() => {
     (async () => {
@@ -47,7 +55,9 @@ export default function ClientSetup() {
     if (s===0) {
       if (!f.first_name) m.push('First name');
       if (!f.last_name)  m.push('Last name');
-      if (!f.phone || f.phone.replace(/\D/g,'').length < 8) m.push('A valid phone number');
+      const ph = validatePhone(f.phone);
+      if (!ph.ok) m.push(ph.reason!);
+      else if (!f.phone_verified) m.push('Confirm your mobile with the code we send');
     }
     if (s===1) {
       if (!f.default_address)  m.push('Your address');
@@ -63,7 +73,8 @@ export default function ClientSetup() {
       id: user.id,
       first_name: f.first_name,
       last_name: f.last_name,
-      phone: f.phone,
+      phone: validatePhone(f.phone).value || f.phone,
+      phone_verified: !!f.phone_verified,
       email: user.email,
       default_address: f.default_address,
       default_locality: f.default_locality,
@@ -143,7 +154,18 @@ export default function ClientSetup() {
               <Text style={s.lbl}>Mobile number</Text>
               <TextInput style={s.input} value={f.phone} onChangeText={(t:string)=>set('phone',t)}
                 placeholder="+356 7900 0000" placeholderTextColor={C.muted} keyboardType="phone-pad" />
-              <Text style={s.hint}>Your cleaner uses this to reach you on the day.</Text>
+              <Text style={s.hint}>
+                Your provider uses this to reach you on the day. We also send your
+                job PIN here.
+              </Text>
+
+              {validatePhone(f.phone).ok && (
+                <PhoneVerify
+                  phone={validatePhone(f.phone).value || f.phone}
+                  verified={!!f.phone_verified}
+                  onVerified={(v)=>{ setF((p:any)=>({...p, phone:v, phone_verified:true})); setMissing([]); }}
+                />
+              )}
 
               <TouchableOpacity style={[s.optCard, f.whatsapp_opt_in&&s.optCardOn]}
                 onPress={()=>set('whatsapp_opt_in', !f.whatsapp_opt_in)}>
@@ -171,14 +193,13 @@ export default function ClientSetup() {
                 placeholder="Flat 4, 12 Tower Road" placeholderTextColor={C.muted} />
 
               <Text style={s.lbl}>Locality</Text>
-              <View style={s.chips}>
-                {LOCALITIES.map(l=>(
-                  <TouchableOpacity key={l} style={[s.chip, f.default_locality===l&&s.chipOn]}
-                    onPress={()=>set('default_locality',l)}>
-                    <Text style={[s.chipTxt, f.default_locality===l&&s.chipTxtOn]}>{l}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              <Picker
+                value={f.default_locality}
+                options={MALTA_LOCALITIES}
+                onChange={(v)=>set('default_locality', v)}
+                placeholder="Where is it?"
+                title="Locality"
+              />
 
               <View style={s.summary}>
                 <Text style={s.summaryTitle}>You're all set</Text>
