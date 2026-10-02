@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { fmtDuration } from '../../lib/services';
 import PartsPanel from '../../components/PartsPanel';
+import Chat from '../../components/Chat';
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Waiting for cleaner',color:C.amber, bg:C.amberLt,   icon:'⏳'},
@@ -43,7 +44,7 @@ const DISPUTE_REASONS = [
 ];
 
 export default function Bookings() {
-  const { bookings, cleaners, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, loadBookings } = useApp();
+  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, loadBookings } = useApp();
   const [refreshing, setRefreshing]   = useState(false);
   const [busy, setBusy]               = useState<string|null>(null);
   const [disputeFor, setDisputeFor]   = useState<string|null>(null);
@@ -283,6 +284,17 @@ export default function Bookings() {
                   </View>
                 );
               })()}
+
+              {['accepted','en_route','arrived','in_progress','awaiting_confirmation']
+                .includes(b.status) && cleaner && (
+                <Chat
+                  booking={b}
+                  role="client"
+                  myId={userId}
+                  otherName={cleaner.name}
+                  otherPhone={(cleaner as any).phone}
+                />
+              )}
 
               {['arrived','in_progress','awaiting_confirmation','completed'].includes(b.status) && (
                 <PartsPanel

@@ -176,6 +176,20 @@ const TERMS: Section[] = [
     ],
   },
   {
+    h: 'Keeping work on Poji',
+    p: [
+      'Poji exists because both sides are protected: payment is held until the work is approved, disputes are reviewed with evidence, and every job is on record. That only works if the job stays on the platform.',
+      'Taking a client off Poji — arranging the same work privately, asking to cancel a booking and pay in cash, or soliciting direct contact for future jobs — breaches these terms.',
+    ],
+    table: [
+      ['First breach',  'Written warning on your account'],
+      ['Second breach', '€50 penalty, taken from your next payout'],
+      ['Third breach',  '30-day suspension and a €100 penalty'],
+      ['Fourth breach', 'Permanent ban. Outstanding balance held pending review'],
+    ],
+    p2b: true,
+  },
+  {
     h: 'What Poji is not responsible for',
     p: [
       'We check identity and documents, but we do not supervise the work. The provider is responsible for what they do in your home or to your vehicle.',
@@ -256,6 +270,14 @@ export default function Legal() {
             {(sec as any).p2 && (
               <Text style={s.p}>
                 To exercise any of these, email {EMAIL}. We answer within 30 days.
+              </Text>
+            )}
+
+            {(sec as any).p2b && (
+              <Text style={s.p}>
+                A client who takes a provider off the platform has their account closed.
+                We read flagged messages before acting, and you can reply before any
+                penalty stands.
               </Text>
             )}
           </View>

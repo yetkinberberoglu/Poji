@@ -20,6 +20,19 @@ export default function ProviderProfile() {
   const [error, setError]   = useState('');
   const [loading, setLoad]  = useState(true);
   const [photoUrl, setPhotoUrl] = useState<string|null>(null);
+  const [standing, setStanding] = useState<any>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data:{ user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase.from('profiles')
+        .select('suspended_until, outstanding_fines, violation_count')
+        .eq('id', user.id).maybeSingle();
+      if (data && (data.violation_count || data.outstanding_fines || data.suspended_until))
+        setStanding(data);
+    })();
+  }, []);
 
   const [f, setF] = useState<any>({
     first_name:'', last_name:'', status:'draft',
@@ -124,6 +137,33 @@ export default function ProviderProfile() {
 
       {savedAt && <Text style={s.savedNote}>Saved at {savedAt}</Text>}
       {error ? <View style={s.errBox}><Text style={s.errTxt}>⚠️  {error}</Text></View> : null}
+
+      {standing && (
+        <View style={s.standingCard}>
+          <Text style={s.standingTitle}>
+            {standing.suspended_until && new Date(standing.suspended_until) >= new Date()
+              ? '⛔  Account suspended'
+              : '⚠️  Note on your account'}
+          </Text>
+          {standing.suspended_until && new Date(standing.suspended_until) >= new Date() && (
+            <Text style={s.standingTxt}>
+              You can't take jobs until{' '}
+              {new Date(standing.suspended_until).toLocaleDateString('en-GB',
+                {day:'numeric', month:'long'})}.
+            </Text>
+          )}
+          {Number(standing.outstanding_fines) > 0 && (
+            <Text style={s.standingTxt}>
+              €{Number(standing.outstanding_fines).toFixed(2)} outstanding, taken from
+              your next payout.
+            </Text>
+          )}
+          <Text style={s.standingTxt}>
+            {standing.violation_count} breach{standing.violation_count===1?'':'es'} on
+            record. If you think this is wrong, email support.
+          </Text>
+        </View>
+      )}
 
       {/* ── availability ── */}
       <View style={s.availCard}>
@@ -482,6 +522,10 @@ const s = StyleSheet.create({
     borderWidth:1,borderColor:'#FECACA'},
   errTxt:{fontSize:13,color:C.red,fontWeight:'600'},
 
+  standingCard:{marginHorizontal:20,marginTop:18,backgroundColor:C.redLt,borderRadius:16,
+    padding:16,gap:6,borderWidth:1,borderColor:'#FECACA'},
+  standingTitle:{fontSize:15,fontWeight:'800',color:C.red},
+  standingTxt:{fontSize:12,color:C.text,lineHeight:18},
   availCard:{flexDirection:'row',alignItems:'center',gap:14,marginHorizontal:20,marginTop:18,
     backgroundColor:C.white,borderRadius:16,padding:16,borderWidth:1,borderColor:C.border,...S.sm},
   availTitle:{fontSize:15,fontWeight:'800',color:C.dark},

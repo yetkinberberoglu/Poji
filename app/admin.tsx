@@ -7,9 +7,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { findTrade, TRADES } from '../constants/trades';
+import { nextPenalty, PENALTIES } from '../lib/moderation';
 import { notify } from '../lib/notify';
 
-const TABS = ['Overview','Applications','Clients','Providers','Bookings','Disputes'];
+const TABS = ['Overview','Applications','Clients','Providers','Bookings','Disputes','Flagged'];
 
 const APP_STATUS: Record<string,{label:string;color:string;bg:string}> = {
   draft:        {label:'Draft',        color:C.muted, bg:C.bgAlt},
@@ -56,6 +57,10 @@ export default function Admin() {
   const [profiles, setProfiles]  = useState<any[]>([]);
   const [bookings, setBookings]  = useState<any[]>([]);
   const [reviews, setReviews]    = useState<any[]>([]);
+  const [flagged, setFlagged]    = useState<any[]>([]);
+  const [violations, setViol]    = useState<any[]>([]);
+  const [penaltyFor, setPenalty] = useState<string|null>(null);
+  const [penaltyNote, setPNote]  = useState('');
   const [loading, setLoading]    = useState(true);
   const [refreshing, setRefresh] = useState(false);
   const [busy, setBusy]          = useState<string|null>(null);
@@ -73,15 +78,19 @@ export default function Admin() {
     const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
     if (me?.role !== 'admin') { setNotAdmin(true); setLoading(false); return; }
 
-    const [a, p, b, r] = await Promise.all([
+    const [a, p, b, r, fl, vi] = await Promise.all([
       supabase.from('cleaner_profiles').select('*').order('submitted_at',{ascending:false}),
       supabase.from('profiles').select('*'),
       supabase.from('bookings').select('*').order('created_at',{ascending:false}),
       supabase.from('reviews').select('*'),
+      supabase.from('messages').select('*').eq('flagged', true)
+        .order('created_at', { ascending:false }).limit(100),
+      supabase.from('violations').select('*').order('created_at', { ascending:false }),
     ]);
 
     setApps(a.data||[]); setProfiles(p.data||[]);
     setBookings(b.data||[]); setReviews(r.data||[]);
+    setFlagged(fl.data||[]); setViol(vi.data||[]);
     setLoading(false);
   };
 
@@ -235,6 +244,60 @@ export default function Admin() {
     if (error) console.log('clearFinished:', error.message);
     setBulkBusy(false);
     await load();
+  };
+
+  const priorCount = (userId:string) =>
+    violations.filter(v => v.user_id === userId).length;
+
+  const raisePenalty = async (userId:string, bookingId:string|null, evidence:string) => {
+    setBusy(userId);
+    const { data:{ user } } = await supabase.auth.getUser();
+    const prior = priorCount(userId);
+    const pen   = nextPenalty(prior);
+
+    await supabase.from('violations').insert({
+      user_id: userId,
+      booking_id: bookingId,
+      kind: 'off_platform',
+      severity: pen.severity,
+      fine_amount: pen.fine,
+      note: penaltyNote || pen.label,
+      evidence,
+      raised_by: user?.id,
+      suspended_until: pen.severity === 'suspension'
+        ? new Date(Date.now() + 30*864e5).toISOString().slice(0,10) : null,
+    });
+
+    // reflect it on the account
+    const patch: any = { violation_count: prior + 1 };
+    if (pen.fine > 0) {
+      const { data: prof } = await supabase.from('profiles')
+        .select('outstanding_fines').eq('id', userId).maybeSingle();
+      patch.outstanding_fines = Number(prof?.outstanding_fines || 0) + pen.fine;
+    }
+    if (pen.severity === 'suspension')
+      patch.suspended_until = new Date(Date.now() + 30*864e5).toISOString().slice(0,10);
+
+    await supabase.from('profiles').update(patch).eq('id', userId);
+
+    if (pen.severity === 'suspension' || pen.severity === 'ban') {
+      await supabase.from('cleaner_profiles')
+        .update({ available: false,
+                  verification_status: pen.severity === 'ban' ? 'rejected' : 'approved',
+                  suspended_until: patch.suspended_until || null })
+        .eq('id', userId);
+    }
+
+    setPenalty(null); setPNote('');
+    await load();
+    setBusy(null);
+  };
+
+  const dismissFlag = async (msgId:string) => {
+    setBusy(msgId);
+    await supabase.from('messages').update({ flagged:false }).eq('id', msgId);
+    await load();
+    setBusy(null);
   };
 
   const resolveDispute = async (id:string, outcome:'completed'|'cancelled') => {
@@ -662,6 +725,135 @@ export default function Admin() {
         </>
       )}
 
+      {/* ════════ FLAGGED ════════ */}
+      {tab===6 && (
+        <>
+          <View style={st.miniRow}>
+            <Mini label="Flagged"    value={String(flagged.length)} color={C.red} />
+            <Mini label="Penalties"  value={String(violations.length)} color={C.amber} />
+            <Mini label="Suspended"  value={String(violations.filter(v=>v.severity==='suspension').length)} />
+          </View>
+
+          {flagged.length === 0 && violations.length === 0 ? (
+            <View style={st.empty}>
+              <Text style={st.emptyIcon}>✅</Text>
+              <Text style={st.emptyTxt}>Nothing flagged</Text>
+              <Text style={st.emptySub}>Messages that look like off-platform deals land here.</Text>
+            </View>
+          ) : null}
+
+          {flagged.map(m=>{
+            const sender = profiles.find((p:any)=>p.id===m.sender_id);
+            const bk     = bookings.find((b:any)=>b.id===m.booking_id);
+            const prior  = priorCount(m.sender_id);
+            const pen    = nextPenalty(prior);
+            const isBusy = busy===m.sender_id || busy===m.id;
+            return (
+              <View key={m.id} style={[st.card,{borderColor:'#FECACA',borderWidth:1.5}]}>
+                <View style={st.rowBetween}>
+                  <View style={{flex:1}}>
+                    <Text style={st.cardTitle}>
+                      {sender?.full_name || 'Unknown'}
+                      <Text style={st.cardSub}>  ·  {m.sender_role}</Text>
+                    </Text>
+                    <Text style={st.cardSub}>
+                      {new Date(m.created_at).toLocaleString('en-GB')}
+                      {bk ? `  ·  ${bk.address}` : ''}
+                    </Text>
+                  </View>
+                  {prior > 0 && (
+                    <View style={[st.pill,{backgroundColor:C.redLt}]}>
+                      <Text style={[st.pillTxt,{color:C.red}]}>{prior} prior</Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={st.quoteBox}>
+                  <Text style={st.quoteTxt}>"{m.body}"</Text>
+                </View>
+
+                {(m.flag_reasons || []).length > 0 && (
+                  <View style={st.reasonWrap}>
+                    {(m.flag_reasons || []).map((r:string)=>(
+                      <View key={r} style={st.reasonTag}>
+                        <Text style={st.reasonTxt}>{r}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {penaltyFor === m.id ? (
+                  <View style={{gap:8}}>
+                    <View style={st.penBox}>
+                      <Text style={st.penTitle}>Next step: {pen.label}</Text>
+                      <Text style={st.penTxt}>{pen.detail}</Text>
+                    </View>
+                    <TextInput style={st.textArea} value={penaltyNote} onChangeText={setPNote}
+                      placeholder="Note for the record (optional)"
+                      placeholderTextColor={C.muted} multiline textAlignVertical="top" />
+                    <View style={st.actionRow}>
+                      <TouchableOpacity style={st.ghostBtn}
+                        onPress={()=>{setPenalty(null);setPNote('');}}>
+                        <Text style={st.ghostTxt}>Back</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[st.dangerBtn,isBusy&&st.dis]} disabled={isBusy}
+                        onPress={()=>raisePenalty(m.sender_id, m.booking_id, m.body)}>
+                        <Text style={st.whiteTxt}>{isBusy?'…':`Apply ${pen.label}`}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={st.actionRow}>
+                    <TouchableOpacity style={[st.ghostBtn,isBusy&&st.dis]} disabled={isBusy}
+                      onPress={()=>dismissFlag(m.id)}>
+                      <Text style={st.ghostTxt}>False alarm</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[st.rejectBtn,isBusy&&st.dis]} disabled={isBusy}
+                      onPress={()=>setPenalty(m.id)}>
+                      <Text style={st.rejectTxt}>Act on this</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+
+          {violations.length > 0 && (
+            <>
+              <Text style={st.sectionLbl}>Penalties on record</Text>
+              {violations.map(v=>{
+                const who = profiles.find((p:any)=>p.id===v.user_id);
+                return (
+                  <View key={v.id} style={st.card}>
+                    <View style={st.rowBetween}>
+                      <View style={{flex:1}}>
+                        <Text style={st.cardTitle}>{who?.full_name || 'Unknown'}</Text>
+                        <Text style={st.cardSub}>
+                          {new Date(v.created_at).toLocaleDateString('en-GB')}
+                          {v.note ? `  ·  ${v.note}` : ''}
+                        </Text>
+                      </View>
+                      <View style={[st.pill,{backgroundColor:
+                        v.severity==='ban' ? C.redLt :
+                        v.severity==='suspension' ? C.amberLt : C.bgAlt}]}>
+                        <Text style={[st.pillTxt,{color:
+                          v.severity==='ban' ? C.red :
+                          v.severity==='suspension' ? C.amber : C.muted}]}>
+                          {v.severity}{v.fine_amount>0 ? ` · ${money(v.fine_amount)}` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                    {!!v.evidence && (
+                      <Text style={st.evidence} numberOfLines={2}>"{v.evidence}"</Text>
+                    )}
+                  </View>
+                );
+              })}
+            </>
+          )}
+        </>
+      )}
+
       {/* ════════ DISPUTES ════════ */}
       {tab===5 && (
         disputes.length===0 ? <Empty text="No open disputes 🎉" /> :
@@ -866,6 +1058,20 @@ const st = StyleSheet.create({
   noteRed:{backgroundColor:C.redLt,borderRadius:10,padding:10,borderWidth:1,borderColor:'#FECACA'},
   noteRedTxt:{fontSize:12,color:C.red,fontWeight:'600'},
   dis:{opacity:0.5},
+  quoteBox:{backgroundColor:C.bgAlt,borderRadius:10,padding:12,borderLeftWidth:3,
+    borderLeftColor:C.red},
+  quoteTxt:{fontSize:13,color:C.text,lineHeight:19,fontStyle:'italic'},
+  reasonWrap:{flexDirection:'row',flexWrap:'wrap',gap:6},
+  reasonTag:{backgroundColor:C.redLt,paddingHorizontal:9,paddingVertical:4,borderRadius:10,
+    borderWidth:1,borderColor:'#FECACA'},
+  reasonTxt:{fontSize:10,fontWeight:'700',color:C.red},
+  penBox:{backgroundColor:C.amberLt,borderRadius:10,padding:12,gap:4,
+    borderWidth:1,borderColor:'#FDE68A'},
+  penTitle:{fontSize:13,fontWeight:'800',color:C.amber},
+  penTxt:{fontSize:12,color:C.text,lineHeight:17},
+  evidence:{fontSize:12,color:C.muted,fontStyle:'italic',marginTop:6},
+  sectionLbl:{fontSize:12,fontWeight:'800',color:C.muted,textTransform:'uppercase',
+    letterSpacing:0.6,paddingHorizontal:20,marginTop:20,marginBottom:10},
   bulkBar:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginHorizontal:20,marginBottom:12,backgroundColor:C.amberLt,borderRadius:12,paddingHorizontal:14,paddingVertical:10,borderWidth:1,borderColor:'#FDE68A',gap:10},
   bulkTxt:{fontSize:12,color:C.amber,fontWeight:'700',flex:1},
   bulkBtn:{backgroundColor:C.red,borderRadius:10,paddingHorizontal:14,paddingVertical:8},

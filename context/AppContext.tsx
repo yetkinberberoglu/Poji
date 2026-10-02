@@ -445,6 +445,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const acceptJob = async (id: string, myCleanerId: string): Promise<boolean> => {
+    // a suspended account cannot pick up work
+    const { data: me } = await supabase.from('profiles')
+      .select('suspended_until').eq('id', myCleanerId).maybeSingle();
+    if (me?.suspended_until && new Date(me.suspended_until) >= new Date()) {
+      console.log('acceptJob: account suspended until', me.suspended_until);
+      return false;
+    }
+
     const { data: current } = await supabase
       .from('bookings').select('status').eq('id', id).maybeSingle();
     if (!current || !['pending','pending_pool'].includes(current.status)) return false;

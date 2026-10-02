@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase';
 import { findTrade } from '../../constants/trades';
 import PartsPanel from '../../components/PartsPanel';
 import ProposeTime from '../../components/ProposeTime';
+import Chat from '../../components/Chat';
 import { useState, useEffect } from 'react';
 import { fmtDuration } from '../../lib/services';
 import { directionsLink, mapsLink } from '../../lib/location';
@@ -44,6 +45,27 @@ export default function ProviderScreen() {
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
   const [pinError, setPinError]     = useState<Record<string,string>>({});
   const [proposingFor, setProposing]= useState<string|null>(null);
+  const [clientNames, setClientNames]   = useState<Record<string,string>>({});
+  const [clientPhones, setClientPhones] = useState<Record<string,string>>({});
+
+  useEffect(() => {
+    const ids = Array.from(new Set(
+      bookings.map(b => b.clientId).filter(Boolean)
+    )) as string[];
+    if (!ids.length) return;
+    (async () => {
+      const { data } = await supabase.from('client_profiles')
+        .select('id, first_name, last_name, phone').in('id', ids);
+      const names: Record<string,string> = {};
+      const phones: Record<string,string> = {};
+      (data || []).forEach((c:any) => {
+        names[c.id]  = `${c.first_name || ''} ${c.last_name || ''}`.trim() || 'Client';
+        phones[c.id] = c.phone || '';
+      });
+      setClientNames(names);
+      setClientPhones(phones);
+    })();
+  }, [bookings.length]);
 
   const doPropose = async (id: string, date: string, time: string, note: string) => {
     setBusy(id);
@@ -455,6 +477,17 @@ export default function ProviderScreen() {
                     <Text style={s0.whiteBtnTxt}>{isBusy?'…':'Start Job'}</Text>
                   </TouchableOpacity>
                 </View>
+              )}
+
+              {['accepted','en_route','arrived','in_progress','awaiting_confirmation']
+                .includes(b.status) && (
+                <Chat
+                  booking={b}
+                  role="cleaner"
+                  myId={userId}
+                  otherName={clientNames[b.clientId || ''] || 'the client'}
+                  otherPhone={clientPhones[b.clientId || '']}
+                />
               )}
 
               {['arrived','in_progress','awaiting_confirmation'].includes(b.status) && (
