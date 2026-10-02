@@ -5,10 +5,12 @@ import { useApp } from '../../context/AppContext';
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { fmtDuration } from '../../lib/services';
+import PartsPanel from '../../components/PartsPanel';
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Waiting for cleaner',color:C.amber, bg:C.amberLt,   icon:'⏳'},
-  pending_pool:          {label:'Finding a cleaner', color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
+  pending_pool:          {label:'Finding a provider',color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
+  reschedule_proposed:   {label:'New time offered', color:C.teal,   bg:C.tealLt,    icon:'📅'},
   accepted:              {label:'Accepted',          color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'On the way',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
   arrived:               {label:'Cleaner arrived',   color:C.amber,  bg:C.amberLt,   icon:'🔐'},
@@ -41,7 +43,7 @@ const DISPUTE_REASONS = [
 ];
 
 export default function Bookings() {
-  const { bookings, cleaners, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, loadBookings } = useApp();
+  const { bookings, cleaners, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, loadBookings } = useApp();
   const [refreshing, setRefreshing]   = useState(false);
   const [busy, setBusy]               = useState<string|null>(null);
   const [disputeFor, setDisputeFor]   = useState<string|null>(null);
@@ -71,6 +73,10 @@ export default function Bookings() {
   const onRefresh = async () => { setRefreshing(true); await loadBookings(); setRefreshing(false); };
   const confirmWork = async (id: string) => { setBusy(id); await clientConfirm(id); setBusy(null); };
   const doRelease = async (id: string) => { setBusy(id); await releaseToPool(id); setBusy(null); };
+
+  const doProposal = async (id: string, accept: boolean) => {
+    setBusy(id); await respondToProposal(id, accept); setBusy(null);
+  };
   const doReassign = async (id: string, cleanerId: string) => {
     setBusy(id); await reassignCleaner(id, cleanerId); setBusy(null); setPickFor(null);
   };
@@ -192,6 +198,50 @@ export default function Bookings() {
                 );
               })()}
 
+              {b.status==='reschedule_proposed' && (
+                <View style={st.proposalBox}>
+                  <Text style={st.proposalTitle}>
+                    📅  {cleaner?.name?.split(' ')[0] || 'Your provider'} offers a different time
+                  </Text>
+
+                  <View style={st.compareRow}>
+                    <View style={st.compareCol}>
+                      <Text style={st.compareLbl}>You asked for</Text>
+                      <Text style={st.compareOld}>{prettyDate(b.date)}</Text>
+                      <Text style={st.compareOldTime}>{b.time}</Text>
+                    </View>
+                    <Text style={st.compareArrow}>→</Text>
+                    <View style={st.compareCol}>
+                      <Text style={st.compareLbl}>They can come</Text>
+                      <Text style={st.compareNew}>{prettyDate(b.proposedDate || '')}</Text>
+                      <Text style={st.compareNewTime}>{b.proposedTime}</Text>
+                    </View>
+                  </View>
+
+                  {!!b.proposedNote && (
+                    <View style={st.proposalNote}>
+                      <Text style={st.proposalNoteTxt}>"{b.proposedNote}"</Text>
+                    </View>
+                  )}
+
+                  <View style={st.row}>
+                    <TouchableOpacity style={[st.declineBtn,isBusy&&st.dis]} disabled={isBusy}
+                      onPress={()=>doProposal(b.id, false)}>
+                      <Text style={st.declineTxt}>Find someone else</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[st.acceptBtn,isBusy&&st.dis]} disabled={isBusy}
+                      onPress={()=>doProposal(b.id, true)}>
+                      <Text style={st.whiteTxt}>{isBusy?'…':'✓  That works'}</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={st.proposalHint}>
+                    Declining puts your job back out to every available provider —
+                    at your original time.
+                  </Text>
+                </View>
+              )}
+
               {b.status==='pending_pool' && (
                 <View style={st.poolBox}>
                   <Text style={st.poolTitle}>🌐  Finding you a cleaner</Text>
@@ -234,6 +284,15 @@ export default function Bookings() {
                 );
               })()}
 
+              {['arrived','in_progress','awaiting_confirmation','completed'].includes(b.status) && (
+                <PartsPanel
+                  bookingId={b.id}
+                  role="client"
+                  locked={b.status === 'completed'}
+                  onChange={loadBookings}
+                />
+              )}
+
               {b.status==='awaiting_confirmation' && (
                 <View style={st.confirmBox}>
                   <Text style={st.confirmTitle}>👀  Your cleaner marked this job as finished</Text>
@@ -245,6 +304,20 @@ export default function Bookings() {
                         <Text style={st.billLbl}>Time worked</Text>
                         <Text style={st.billVal}>{fmtDuration(b.actualMinutes)}</Text>
                       </View>
+                      {Number(b.partsTotal) > 0 && (
+                        <>
+                          <View style={st.billRow}>
+                            <Text style={st.billLbl}>Labour</Text>
+                            <Text style={st.billVal}>
+                              €{(Number(b.finalTotal ?? b.total) - Number(b.partsTotal)).toFixed(2)}
+                            </Text>
+                          </View>
+                          <View style={st.billRow}>
+                            <Text style={st.billLbl}>Parts you approved</Text>
+                            <Text style={st.billVal}>€{Number(b.partsTotal).toFixed(2)}</Text>
+                          </View>
+                        </>
+                      )}
                       <View style={st.billRow}>
                         <Text style={st.billLbl}>Estimated was</Text>
                         <Text style={st.billMuted}>€{Number(b.estimatedTotal ?? b.total).toFixed(2)}</Text>
@@ -255,11 +328,14 @@ export default function Bookings() {
                       </View>
                       {b.finalTotal != null && b.estimatedTotal != null && (
                         <Text style={st.billNote}>
-                          {b.finalTotal < b.estimatedTotal
-                            ? `The job finished early — you save €${(b.estimatedTotal - b.finalTotal).toFixed(2)}.`
-                            : b.finalTotal > b.estimatedTotal
-                            ? `The job ran longer than estimated — €${(b.finalTotal - b.estimatedTotal).toFixed(2)} more.`
-                            : 'Exactly as estimated.'}
+                          {(() => {
+                            const labour = Number(b.finalTotal) - Number(b.partsTotal || 0);
+                            const est    = Number(b.estimatedTotal);
+                            const diff   = +(labour - est).toFixed(2);
+                            if (diff < 0) return `The job finished early — €${Math.abs(diff).toFixed(2)} less than estimated.`;
+                            if (diff > 0) return `The job ran longer than estimated — €${diff.toFixed(2)} more.`;
+                            return 'Labour exactly as estimated.';
+                          })()}
                         </Text>
                       )}
                     </View>
@@ -349,7 +425,7 @@ export default function Bookings() {
                 </View>
               )}
 
-              {['pending','pending_pool','accepted'].includes(b.status) && (
+              {['pending','pending_pool','reschedule_proposed','accepted'].includes(b.status) && (
                 <TouchableOpacity style={st.cancelBooking} onPress={()=>updateStatus(b.id,'cancelled')}>
                   <Text style={st.cancelBookingTxt}>Cancel Booking</Text>
                 </TouchableOpacity>
@@ -452,6 +528,29 @@ const st = StyleSheet.create({
   listTask:{fontSize:12,color:C.text,flex:1,lineHeight:18},
   listTaskMissed:{color:C.red,fontWeight:'600'},
   row:{flexDirection:'row',gap:10,marginTop:8},
+  proposalBox:{backgroundColor:C.tealLt,borderRadius:14,padding:14,gap:10,
+    borderWidth:1,borderColor:'#BAE6FD'},
+  proposalTitle:{fontSize:14,fontWeight:'800',color:C.teal},
+  compareRow:{flexDirection:'row',alignItems:'center',gap:10},
+  compareCol:{flex:1,backgroundColor:C.white,borderRadius:11,padding:11,
+    borderWidth:1,borderColor:C.border},
+  compareLbl:{fontSize:10,color:C.muted,fontWeight:'700',textTransform:'uppercase',
+    letterSpacing:0.4},
+  compareOld:{fontSize:13,fontWeight:'700',color:C.muted,marginTop:4,
+    textDecorationLine:'line-through'},
+  compareOldTime:{fontSize:12,color:C.muted,textDecorationLine:'line-through'},
+  compareNew:{fontSize:13,fontWeight:'800',color:C.dark,marginTop:4},
+  compareNewTime:{fontSize:12,color:C.teal,fontWeight:'700'},
+  compareArrow:{fontSize:18,color:C.teal,fontWeight:'800'},
+  proposalNote:{backgroundColor:C.white,borderRadius:10,padding:11,
+    borderWidth:1,borderColor:C.border},
+  proposalNoteTxt:{fontSize:12,color:C.text,lineHeight:18,fontStyle:'italic'},
+  declineBtn:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:12,
+    paddingVertical:12,alignItems:'center',backgroundColor:C.white},
+  declineTxt:{fontSize:13,fontWeight:'700',color:C.muted},
+  acceptBtn:{flex:1.3,backgroundColor:C.teal,borderRadius:12,paddingVertical:12,
+    alignItems:'center'},
+  proposalHint:{fontSize:11,color:C.text,lineHeight:16},
   reportBtn:{flex:1,borderWidth:1.5,borderColor:C.red,borderRadius:12,paddingVertical:12,alignItems:'center'},
   reportTxt:{color:C.red,fontWeight:'700',fontSize:13},
   approveBtn:{flex:1,backgroundColor:C.green,borderRadius:12,paddingVertical:12,alignItems:'center'},

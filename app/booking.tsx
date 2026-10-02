@@ -209,6 +209,7 @@ export default function BookingScreen() {
         multiplier, suppliesByCleaner, hourlyRate: baseRate,
         extraIds: chosenExtras, propertySize: size,
         estimatedMinutes: est.totalMinutes,
+        tradeId: svcType?.trade_id || params.trade || null,
         extrasForChecklist: selectedExtras,
       });
       Alert.alert('✅ Booking Confirmed!','Your cleaner has been notified.',[

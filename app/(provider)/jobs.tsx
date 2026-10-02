@@ -4,6 +4,8 @@ import { useApp } from '../../context/AppContext';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { findTrade } from '../../constants/trades';
+import PartsPanel from '../../components/PartsPanel';
+import ProposeTime from '../../components/ProposeTime';
 import { useState, useEffect } from 'react';
 import { fmtDuration } from '../../lib/services';
 import { directionsLink, mapsLink } from '../../lib/location';
@@ -23,6 +25,7 @@ const prettyDate = (d?: string) => {
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Offered to You',  color:C.amber,  bg:C.amberLt,   icon:'🔔'},
+  reschedule_proposed:   {label:'Time suggested',   color:C.teal,   bg:C.tealLt,    icon:'📅'},
   pending_pool:          {label:'Open to All',     color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
   accepted:              {label:'Accepted',        color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'En Route',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
@@ -35,11 +38,19 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
 };
 
 export default function ProviderScreen() {
-  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, loadBookings, userName, userId, myCategories } = useApp();
+  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, loadBookings, userName, userId, myCategories } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy]             = useState<string|null>(null);
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
   const [pinError, setPinError]     = useState<Record<string,string>>({});
+  const [proposingFor, setProposing]= useState<string|null>(null);
+
+  const doPropose = async (id: string, date: string, time: string, note: string) => {
+    setBusy(id);
+    await proposeTime(id, date, time, note, userId);
+    setBusy(null);
+    setProposing(null);
+  };
   const [checklist, setChecklist]   = useState<Record<string, any[]>>({});
   const [openList, setOpenList]     = useState<string|null>(null);
   const [tick, setTick]             = useState(Date.now());
@@ -136,16 +147,12 @@ export default function ProviderScreen() {
 
   const doFinish = async (id: string) => { setBusy(id); await finishJob(id); setBusy(null); };
 
-  const VEHICLE_TRADES = ['tyre','battery','mechanic','towing','fuel','carlock','carvalet','vrt'];
-
   const inMyTrade = (b: any) => {
     // anything already assigned to me always shows
     if (b.cleanerId === userId) return true;
-    // roadside jobs carry the service id directly
-    if (b.pricingModel === 'fixed') {
-      return myCategories.some((c:string) =>
-        VEHICLE_TRADES.includes(c) || c === b.serviceType);
-    }
+    // every booking records which trade it belongs to
+    if (b.tradeId) return myCategories.includes(b.tradeId);
+    // older bookings with no trade recorded — fall back to cleaning
     return myCategories.includes('cleaning');
   };
 
@@ -355,24 +362,64 @@ export default function ProviderScreen() {
                       <Text style={s0.poolTxt}>🌐  Open to all cleaners — first to accept gets it</Text>
                     </View>
                   )}
-                  <View style={s0.actions}>
-                    <TouchableOpacity style={[s0.rejectBtn,isBusy&&s0.dis]} disabled={isBusy}
-                      onPress={()=>doStatus(b.id,'pending_pool')}>
-                      <Text style={s0.rejectTxt}>✕  Pass</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[s0.acceptBtn,isBusy&&s0.dis]} disabled={isBusy}
-                      onPress={()=>doAccept(b.id)}>
-                      <Text style={s0.acceptTxt}>{isBusy?'…':'✓  Accept Job'}</Text>
-                    </TouchableOpacity>
-                  </View>
+                  {proposingFor === b.id ? (
+                    <ProposeTime
+                      currentDate={b.date}
+                      currentTime={b.time}
+                      busy={isBusy}
+                      onCancel={()=>setProposing(null)}
+                      onSubmit={(d,t,n)=>doPropose(b.id,d,t,n)}
+                    />
+                  ) : (
+                    <>
+                      <View style={s0.actions}>
+                        <TouchableOpacity style={[s0.rejectBtn,isBusy&&s0.dis]} disabled={isBusy}
+                          onPress={()=>doStatus(b.id,'pending_pool')}>
+                          <Text style={s0.rejectTxt}>✕  Pass</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[s0.acceptBtn,isBusy&&s0.dis]} disabled={isBusy}
+                          onPress={()=>doAccept(b.id)}>
+                          <Text style={s0.acceptTxt}>{isBusy?'…':'✓  Accept Job'}</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <TouchableOpacity style={s0.proposeBtn} onPress={()=>setProposing(b.id)}>
+                        <Text style={s0.proposeTxt}>📅  Can't make it — suggest another time</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
                 </>
               )}
 
+              {b.status==='reschedule_proposed' && (
+                <View style={s0.waitProposal}>
+                  <Text style={s0.waitProposalTitle}>⏳  Waiting on the client</Text>
+                  <Text style={s0.waitProposalTxt}>
+                    You offered {prettyDate(b.proposedDate || '')} at {b.proposedTime}.
+                    They can take it or put the job back out to others.
+                  </Text>
+                </View>
+              )}
+
               {b.status==='accepted' && (
-                <TouchableOpacity style={[s0.tealBtn,isBusy&&s0.dis]} disabled={isBusy}
-                  onPress={()=>doStatus(b.id,'en_route',b.address)}>
-                  <Text style={s0.whiteBtnTxt}>{isBusy?'…':"🚗  I'm On My Way"}</Text>
-                </TouchableOpacity>
+                proposingFor === b.id ? (
+                  <ProposeTime
+                    currentDate={b.date}
+                    currentTime={b.time}
+                    busy={isBusy}
+                    onCancel={()=>setProposing(null)}
+                    onSubmit={(d,t,n)=>doPropose(b.id,d,t,n)}
+                  />
+                ) : (
+                  <>
+                    <TouchableOpacity style={[s0.tealBtn,isBusy&&s0.dis]} disabled={isBusy}
+                      onPress={()=>doStatus(b.id,'en_route',b.address)}>
+                      <Text style={s0.whiteBtnTxt}>{isBusy?'…':"🚗  I'm On My Way"}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={s0.proposeBtn} onPress={()=>setProposing(b.id)}>
+                      <Text style={s0.proposeTxt}>📅  Need to move this job</Text>
+                    </TouchableOpacity>
+                  </>
+                )
               )}
 
               {b.status==='en_route' && (
@@ -408,6 +455,15 @@ export default function ProviderScreen() {
                     <Text style={s0.whiteBtnTxt}>{isBusy?'…':'Start Job'}</Text>
                   </TouchableOpacity>
                 </View>
+              )}
+
+              {['arrived','in_progress','awaiting_confirmation'].includes(b.status) && (
+                <PartsPanel
+                  bookingId={b.id}
+                  role="provider"
+                  locked={b.status === 'awaiting_confirmation'}
+                  onChange={loadBookings}
+                />
               )}
 
               {b.status==='in_progress' && b.pricingModel === 'fixed' && (
@@ -526,6 +582,12 @@ export default function ProviderScreen() {
                         <Text style={s0.settleLbl}>Time worked</Text>
                         <Text style={s0.settleVal}>{fmtDuration(b.actualMinutes)}</Text>
                       </View>
+                      {Number(b.partsTotal) > 0 && (
+                        <View style={s0.settleRow}>
+                          <Text style={s0.settleLbl}>Parts</Text>
+                          <Text style={s0.settleVal}>€{Number(b.partsTotal).toFixed(2)}</Text>
+                        </View>
+                      )}
                       <View style={s0.settleRow}>
                         <Text style={s0.settleLbl}>Your payment</Text>
                         <Text style={s0.settleBig}>€{Number(b.finalCleanerPayment||0).toFixed(2)}</Text>
@@ -670,6 +732,13 @@ const s0 = StyleSheet.create({
   primaryBtn:{backgroundColor:C.primary,borderRadius:12,paddingVertical:14,alignItems:'center'},
   whiteBtnTxt:{color:C.white,fontWeight:'700',fontSize:15},
   dis:{opacity:0.5},
+  proposeBtn:{borderWidth:1.5,borderColor:C.teal,borderRadius:12,paddingVertical:12,
+    alignItems:'center',backgroundColor:C.white},
+  proposeTxt:{fontSize:13,fontWeight:'700',color:C.teal},
+  waitProposal:{backgroundColor:C.tealLt,borderRadius:12,padding:14,gap:5,
+    borderWidth:1,borderColor:'#BAE6FD'},
+  waitProposalTitle:{fontSize:14,fontWeight:'800',color:C.teal},
+  waitProposalTxt:{fontSize:12,color:C.text,lineHeight:18},
   progressBar:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:C.primaryLt,borderRadius:12,padding:14,borderWidth:1,borderColor:C.border},
   progressTitle:{fontSize:13,fontWeight:'800',color:C.primary,marginBottom:8},
   barTrack:{height:6,backgroundColor:C.white,borderRadius:3,overflow:'hidden'},

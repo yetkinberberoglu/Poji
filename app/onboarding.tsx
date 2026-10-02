@@ -57,7 +57,7 @@ export default function Onboarding() {
     team_type:'solo', team_size:1, company_name:'', vat_number:'', company_reg_number:'',
     categories:[] as string[],
     accepts_urgent:false, service_radius_km:'15',
-    hourly_rate:'15', min_hours:'3',
+    hourly_rate:'', min_hours:'2',
     service_areas:[] as string[], covers_all_malta:false, covers_all_gozo:false,
     brings_own_supplies:false, bio:'',
     has_insurance:false, insurance_provider:'', insurance_policy_no:'',
@@ -245,7 +245,7 @@ export default function Onboarding() {
     categories:f.categories.length ? f.categories : ['cleaning'],
     accepts_urgent:!!f.accepts_urgent,
     service_radius_km:Number(f.service_radius_km) || 15,
-    hourly_rate:Number(f.hourly_rate) || 15,
+    hourly_rate:Number(f.hourly_rate) || 0,
     min_hours:Number(f.min_hours) || 2,
     covers_all_malta:!!f.covers_all_malta,
     covers_all_gozo:!!f.covers_all_gozo,
@@ -744,7 +744,12 @@ export default function Onboarding() {
                 <Text style={st.lbl}>Hourly rate (EUR)</Text>
                 <TextInput style={st.inputBig} value={String(f.hourly_rate)}
                   onChangeText={(t:string)=>set('hourly_rate',t.replace(/[^0-9.]/g,''))}
-                  placeholder="15" placeholderTextColor={C.muted} keyboardType="decimal-pad" />
+                  placeholder="—" placeholderTextColor={C.muted} keyboardType="decimal-pad" />
+                <Text style={st.fieldNote}>
+                  What people in Malta typically charge: cleaning €12–18, gardening €15–22,
+                  handyman €20–30, electrician and plumber €30–45, specialist trades €40–60.
+                  Set what your work is worth.
+                </Text>
 
                 <View style={st.calcBox}>
                   <View style={st.calcRow}>

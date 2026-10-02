@@ -31,7 +31,7 @@ export default function Services() {
   };
 
   const open = (t: Trade) => {
-    if (t.roadside) { router.push('/roadside'); return; }
+    if (t.roadside) { router.push(`/roadside?trade=${t.id}`); return; }
     router.push(`/providers?trade=${t.id}`);
   };
 

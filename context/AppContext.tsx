@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/notify';
-import { seedChecklist, seedExtraTasks, finalQuote } from '../lib/services';
+import { seedChecklist, seedExtraTasks, finalQuote, loadParts, partsSummary } from '../lib/services';
 
 export const MOCK_CLEANERS: any[] = [];
 
@@ -31,6 +31,13 @@ export interface Booking {
   hourlyRate?: number | null;
   serviceMultiplier?: number | null;
   suppliesBy?: string | null;
+  proposedDate?: string | null;
+  proposedTime?: string | null;
+  proposedNote?: string | null;
+  proposedBy?: string | null;
+  rescheduleCount?: number | null;
+  partsTotal?: number | null;
+  partsCommission?: number | null;
   pricingModel?: string | null;
   calloutFee?: number | null;
   isUrgent?: boolean | null;
@@ -38,6 +45,7 @@ export interface Booking {
   lng?: number | null;
   locationNote?: string | null;
   vehicleInfo?: string | null;
+  tradeId?: string | null;
 }
 
 export type Cleaner = {
@@ -67,7 +75,7 @@ interface Ctx {
              pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
-             releasedToPool?: boolean }
+             releasedToPool?: boolean; tradeId?: string|null }
   ) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   markArrived: (id: string) => Promise<string>;
@@ -78,6 +86,8 @@ interface Ctx {
   releaseToPool: (id: string) => Promise<void>;
   reassignCleaner: (id: string, newCleanerId: string) => Promise<void>;
   acceptJob: (id: string, myCleanerId: string) => Promise<boolean>;
+  proposeTime: (id: string, date: string, time: string, note: string, myId: string) => Promise<void>;
+  respondToProposal: (id: string, accept: boolean) => Promise<void>;
   loadBookings: () => Promise<void>;
   getCleanerById: (id: string) => Cleaner | undefined;
   userRole: string;
@@ -234,6 +244,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         hourlyRate: b.hourly_rate,
         serviceMultiplier: b.service_multiplier,
         suppliesBy: b.supplies_by,
+        proposedDate: b.proposed_date,
+        proposedTime: b.proposed_time,
+        proposedNote: b.proposed_note,
+        proposedBy: b.proposed_by,
+        rescheduleCount: b.reschedule_count,
+        partsTotal: b.parts_total,
+        partsCommission: b.parts_commission,
         pricingModel: b.pricing_model,
         calloutFee: b.callout_fee,
         isUrgent: b.is_urgent,
@@ -241,6 +258,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         lng: b.lng,
         locationNote: b.location_note,
         vehicleInfo: b.vehicle_info,
+        tradeId: b.trade_id,
       })));
     }
   };
@@ -275,7 +293,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
              pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
-             releasedToPool?: boolean }
+             releasedToPool?: boolean; tradeId?: string|null }
   ) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
@@ -313,6 +331,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       location_accuracy: meta?.locationAccuracy ?? null,
       location_note: meta?.locationNote ?? null,
       vehicle_info: meta?.vehicleInfo ?? null,
+      trade_id: meta?.tradeId ?? null,
       preferred_cleaner_id: b.cleanerId || null,
       preferred_until: meta?.releasedToPool ? null : new Date(Date.now() + 5*60*1000).toISOString(),
       released_to_pool: meta?.releasedToPool ?? false,
@@ -335,13 +354,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // Roadside and pool jobs: alert every approved provider at once
       if (meta?.releasedToPool) {
-        supabase.from('cleaner_profiles').select('id')
+        const wanted = meta?.tradeId;
+        supabase.from('cleaner_profiles').select('id, categories')
           .eq('verification_status','approved')
+          .eq('available', true)
           .then(({ data }) => {
-            (data || []).forEach(c => notify(c.id, 'job_in_pool', {
-              address: b.address, date: b.date, time: b.time, hours: b.hours,
-              earnings: (b.total / 1.029 / 1.18 * 0.80),
-            }, data.id));
+            (data || [])
+              .filter(c => !wanted || (c.categories || []).includes(wanted))
+              .forEach(c => notify(c.id, 'job_in_pool', {
+                address: b.address, date: b.date, time: b.time, hours: b.hours,
+                earnings: (b.total / 1.029 / 1.18 * 0.80),
+              }, data.id));
           });
       } else
       // Tell the preferred cleaner they have a 5-minute priority window
@@ -386,8 +409,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const bk = bookings.find(x => x.id === id);
     if (bk) {
       const { data: pool } = await supabase
-        .from('cleaner_profiles').select('id').eq('verification_status','approved');
-      (pool || []).forEach(c => {
+        .from('cleaner_profiles').select('id, categories')
+        .eq('verification_status','approved').eq('available', true);
+      (pool || [])
+        .filter(c => !bk.tradeId || (c.categories || []).includes(bk.tradeId))
+        .forEach(c => {
         if (c.id === bk.cleanerId) return;
         notify(c.id, 'job_in_pool', {
           address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
@@ -439,6 +465,104 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
+  /** Provider can't make the slot and offers another one */
+  const proposeTime = async (
+    id: string, date: string, time: string, note: string, myId: string
+  ) => {
+    const bk = bookings.find(x => x.id === id);
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b, status:'reschedule_proposed', cleanerId: myId,
+          proposedDate: date, proposedTime: time, proposedNote: note, proposedBy: myId }
+      : b));
+
+    const { error } = await supabase.from('bookings').update({
+      status: 'reschedule_proposed',
+      cleaner_id: myId,
+      proposed_date: date,
+      proposed_time: time,
+      proposed_note: note || null,
+      proposed_by: myId,
+      proposed_at: new Date().toISOString(),
+      reschedule_count: (Number(bk?.rescheduleCount) || 0) + 1,
+    }).eq('id', id);
+
+    if (error) { console.log('proposeTime error:', error.message); return; }
+
+    if (bk?.clientId) {
+      notify(bk.clientId, 'time_proposed', {
+        cleanerName: userName || 'Your provider',
+        oldDate: bk.date, oldTime: bk.time,
+        newDate: date, newTime: time,
+        note: note || '',
+      }, id);
+    }
+  };
+
+  /** Client says yes or no to the new slot */
+  const respondToProposal = async (id: string, accept: boolean) => {
+    const bk = bookings.find(x => x.id === id);
+    if (!bk) return;
+
+    if (accept) {
+      setBookings(prev => prev.map(b => b.id === id
+        ? { ...b, status:'accepted',
+            date: b.proposedDate || b.date, time: b.proposedTime || b.time,
+            proposedDate: null, proposedTime: null, proposedNote: null }
+        : b));
+
+      const { error } = await supabase.from('bookings').update({
+        status: 'accepted',
+        date: bk.proposedDate,
+        start_time: bk.proposedTime,
+        proposed_date: null, proposed_time: null,
+        proposed_note: null, proposed_by: null, proposed_at: null,
+      }).eq('id', id);
+      if (error) console.log('respondToProposal error:', error.message);
+
+      if (bk.cleanerId) {
+        notify(bk.cleanerId, 'time_accepted', {
+          date: bk.proposedDate, time: bk.proposedTime, address: bk.address,
+        }, id);
+      }
+    } else {
+      // back to the pool so someone else can take the original slot
+      setBookings(prev => prev.map(b => b.id === id
+        ? { ...b, status:'pending_pool', releasedToPool:true, cleanerId:'',
+            proposedDate: null, proposedTime: null, proposedNote: null }
+        : b));
+
+      const { error } = await supabase.from('bookings').update({
+        status: 'pending_pool',
+        released_to_pool: true,
+        cleaner_id: null,
+        proposed_date: null, proposed_time: null,
+        proposed_note: null, proposed_by: null, proposed_at: null,
+      }).eq('id', id);
+      if (error) console.log('respondToProposal error:', error.message);
+
+      if (bk.cleanerId) {
+        notify(bk.cleanerId, 'time_declined', {
+          address: bk.address, date: bk.date, time: bk.time,
+        }, id);
+      }
+
+      // tell everyone else it's going spare
+      const { data: pool } = await supabase
+        .from('cleaner_profiles').select('id, categories')
+        .eq('verification_status','approved').eq('available', true);
+      (pool || [])
+        .filter(c => !bk.tradeId || (c.categories || []).includes(bk.tradeId))
+        .forEach(c => {
+        if (c.id === bk.cleanerId) return;
+        notify(c.id, 'job_in_pool', {
+          address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
+          earnings: (bk.total / 1.029 / 1.18 * 0.80),
+        }, id);
+      });
+    }
+  };
+
   const markArrived = async (id: string): Promise<string> => {
     const pin = String(Math.floor(1000 + Math.random() * 9000));
     setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'arrived', pinCode: pin } : b));
@@ -473,6 +597,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const autoAt = new Date(now.getTime() + 6 * 60 * 60 * 1000);
 
     // Work out what the job really cost, based on the timer
+    // Parts the client already agreed to go on the final bill
+    const parts = await loadParts(id);
+    const ps    = partsSummary(parts);
+
     let settle: any = null;
     if (bk?.startedAt) {
       settle = finalQuote({
@@ -492,10 +620,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           autoConfirmAt: autoAt.toISOString(),
           completionPhotos: photos || null,
           actualMinutes: settle?.actualMinutes ?? null,
-          finalTotal: settle?.total ?? null,
-          finalCleanerPayment: settle?.cleanerGets ?? null,
-          finalPlatformCommission: settle?.platform ?? null,
+          finalTotal: settle ? +(settle.total + ps.approvedTotal).toFixed(2)
+                     : ps.approvedTotal > 0 ? +(Number(bk?.total||0) + ps.approvedTotal).toFixed(2)
+                     : null,
+          finalCleanerPayment: settle ? +(settle.cleanerGets + ps.providerGets).toFixed(2) : null,
+          finalPlatformCommission: settle ? +(settle.platform + ps.commission).toFixed(2) : null,
           finalVat: settle?.vat ?? null,
+          partsTotal: ps.approvedTotal,
         }
       : b));
 
@@ -505,12 +636,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       auto_confirm_at: autoAt.toISOString(),
       completion_photos: photos || null,
     };
+    payload.parts_total      = ps.approvedTotal;
+    payload.parts_commission = ps.commission;
+
     if (settle) {
       payload.actual_minutes            = settle.actualMinutes;
-      payload.final_total               = settle.total;
-      payload.final_cleaner_payment     = settle.cleanerGets;
-      payload.final_platform_commission = settle.platform;
+      payload.final_total               = +(settle.total + ps.approvedTotal).toFixed(2);
+      payload.final_cleaner_payment     = +(settle.cleanerGets + ps.providerGets).toFixed(2);
+      payload.final_platform_commission = +(settle.platform + ps.commission).toFixed(2);
       payload.final_vat                 = settle.vat;
+    } else if (ps.approvedTotal > 0 && bk) {
+      // fixed-price job — labour was already agreed, just add the parts
+      const labour = Number(bk.total) || 0;
+      payload.final_total           = +(labour + ps.approvedTotal).toFixed(2);
+      payload.final_cleaner_payment = +(labour/1.029/1.18*0.80 + ps.providerGets).toFixed(2);
+      payload.final_platform_commission = +(labour/1.029/1.18*0.20 + ps.commission).toFixed(2);
     }
 
     const { error } = await supabase.from('bookings').update(payload).eq('id', id);
@@ -532,6 +672,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // The final figure becomes the billed amount
     if (bk?.finalTotal) {
       payload.total_price         = bk.finalTotal;
+      payload.parts_total         = bk.partsTotal ?? 0;
       payload.cleaner_payment     = bk.finalCleanerPayment;
       payload.platform_commission = bk.finalPlatformCommission;
       payload.vat_amount          = bk.finalVat;
@@ -570,7 +711,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       bookings, cleaners, providers: cleaners, availableTrades, providersFor,
       addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
-      releaseToPool, reassignCleaner, acceptJob,
+      releaseToPool, reassignCleaner, acceptJob, proposeTime, respondToProposal,
       loadBookings, getCleanerById,
       userRole, userName, userId, myCategories,
     }}>

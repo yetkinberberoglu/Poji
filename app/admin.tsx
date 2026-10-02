@@ -22,6 +22,7 @@ const APP_STATUS: Record<string,{label:string;color:string;bg:string}> = {
 const BK_STATUS: Record<string,{label:string;color:string;bg:string}> = {
   pending:               {label:'Pending',       color:C.amber,  bg:C.amberLt},
   pending_pool:          {label:'In pool',       color:C.accent, bg:'#F3E8FF'},
+  reschedule_proposed:   {label:'Time offered',  color:C.teal,   bg:C.tealLt},
   accepted:              {label:'Accepted',      color:C.green,  bg:C.greenLt},
   en_route:              {label:'En route',      color:C.teal,   bg:C.tealLt},
   arrived:               {label:'Arrived',       color:C.amber,  bg:C.amberLt},

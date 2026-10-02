@@ -2,18 +2,21 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, ActivityIndicator, Alert, Linking
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
 import { useApp } from '../context/AppContext';
 import { supabase } from '../lib/supabase';
 import { loadServiceTypes, fixedQuote, type ServiceType } from '../lib/services';
+import { findTrade } from '../constants/trades';
 import { getCurrentLocation, reverseGeocode, mapsLink, type Coords } from '../lib/location';
 
 const STEPS = ['Problem','Location','Vehicle','Confirm'];
 
 export default function Roadside() {
-  const { addBooking } = useApp();
+  const { addBooking, availableTrades, providersFor } = useApp();
+  const { trade } = useLocalSearchParams<{trade?: string}>();
+  const tradeInfo = findTrade(trade);
 
   const [step, setStep]     = useState(0);
   const [types, setTypes]   = useState<ServiceType[]>([]);
@@ -39,11 +42,20 @@ export default function Roadside() {
 
   useEffect(() => {
     (async () => {
-      const t = await loadServiceTypes({ category: 'vehicle' });
-      setTypes(t);
+      // One trade was picked, or we show every roadside trade someone covers
+      const t = trade
+        ? await loadServiceTypes({ trade })
+        : await loadServiceTypes({ trades: availableTrades });
+
+      // Never list a job type nobody can actually do
+      const servable = t.filter(x =>
+        !x.trade_id || availableTrades.includes(x.trade_id));
+
+      setTypes(servable);
+      if (servable.length && !svc) setSvc(servable[0].id);
       setLC(false);
     })();
-  }, []);
+  }, [trade, availableTrades.length]);
 
   const askLocation = async () => {
     setLocBusy(true); setDenied(false);
@@ -82,6 +94,7 @@ export default function Roadside() {
         hourlyRate: 0,
         extraIds: [],
         propertySize: 'vehicle',
+        tradeId: type.trade_id || trade || null,
         estimatedMinutes: Number(type.typical_minutes) || 30,
         extrasForChecklist: [],
         pricingModel: 'fixed',
@@ -115,7 +128,7 @@ export default function Roadside() {
         <TouchableOpacity onPress={()=>step>0?setStep(step-1):router.back()}>
           <Text style={s.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={s.title}>Roadside help</Text>
+        <Text style={s.title}>{tradeInfo?.name || 'Roadside help'}</Text>
         <Text style={s.stepNum}>{step+1}/{STEPS.length}</Text>
       </View>
 
@@ -136,10 +149,25 @@ export default function Roadside() {
         {step===0 && (
           <View style={s.step}>
             <Text style={s.stepIntro}>What's happened?</Text>
-            <Text style={s.hint}>One agreed price. No hourly meter, no surprises.</Text>
+            <Text style={s.hint}>
+              One agreed price. No hourly meter, no surprises.
+              {tradeInfo ? ` ${providersFor(tradeInfo.id).length} provider${providersFor(tradeInfo.id).length===1?'':'s'} available.` : ''}
+            </Text>
 
             {loadingCat ? (
               <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
+            ) : types.length === 0 ? (
+              <View style={s.noneBox}>
+                <Text style={s.noneIcon}>{tradeInfo?.icon || '🛞'}</Text>
+                <Text style={s.noneTitle}>Nobody covers this yet</Text>
+                <Text style={s.noneTxt}>
+                  We're signing up providers across Malta. Tell us what you need
+                  and we'll message you when someone can do it.
+                </Text>
+                <TouchableOpacity style={s.noneBtn} onPress={()=>router.push('/request')}>
+                  <Text style={s.noneBtnTxt}>Tell us what you need</Text>
+                </TouchableOpacity>
+              </View>
             ) : types.map(t=>{
               const on = svc === t.id;
               const q  = fixedQuote({
@@ -373,6 +401,13 @@ const s = StyleSheet.create({
   input:{backgroundColor:C.white,borderRadius:14,paddingHorizontal:16,paddingVertical:14,fontSize:15,color:C.text,borderWidth:1.5,borderColor:C.border},
   loadingBox:{paddingVertical:30,alignItems:'center'},
 
+  noneBox:{backgroundColor:C.white,borderRadius:18,padding:28,alignItems:'center',gap:8,
+    borderWidth:1,borderColor:C.border},
+  noneIcon:{fontSize:42},
+  noneTitle:{fontSize:16,fontWeight:'800',color:C.dark},
+  noneTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
+  noneBtn:{backgroundColor:C.primary,borderRadius:12,paddingVertical:12,paddingHorizontal:22,marginTop:6},
+  noneBtnTxt:{color:C.white,fontSize:14,fontWeight:'700'},
   card:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10,...S.sm},
   cardOn:{borderColor:C.amber,backgroundColor:C.amberLt,borderWidth:2},
   cardIcon:{fontSize:28},

@@ -11,6 +11,7 @@ export type ServiceType = {
   typical_minutes?: number | null;
   needs_location?: boolean;
   trade_id?: string | null;
+  allows_parts?: boolean;
 };
 
 export type ServiceExtra = {
@@ -245,4 +246,79 @@ export function distanceKm(
   const la2  = b.lat * Math.PI / 180;
   const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
   return +(2 * R * Math.asin(Math.sqrt(h))).toFixed(1);
+}
+
+
+/** Commission we take on parts — deliberately low so nobody routes around it. */
+export const PARTS_COMMISSION = 0.05;
+
+export type BookingPart = {
+  id: string;
+  booking_id: string;
+  name: string;
+  qty: number;
+  unit_price: number;
+  total: number;
+  note?: string | null;
+  status: 'proposed' | 'approved' | 'rejected';
+  created_at: string;
+};
+
+export async function loadParts(bookingId: string): Promise<BookingPart[]> {
+  const { data, error } = await supabase
+    .from('booking_parts').select('*')
+    .eq('booking_id', bookingId)
+    .order('created_at');
+  if (error) { console.log('loadParts:', error.message); return []; }
+  return data || [];
+}
+
+export async function addPart(bookingId: string, part: {
+  name: string; qty: number; unitPrice: number; note?: string;
+}) {
+  const { data:{ user } } = await supabase.auth.getUser();
+  const total = +(part.qty * part.unitPrice).toFixed(2);
+  const { data, error } = await supabase.from('booking_parts').insert({
+    booking_id: bookingId,
+    added_by: user?.id,
+    name: part.name.trim(),
+    qty: part.qty,
+    unit_price: part.unitPrice,
+    total,
+    note: part.note?.trim() || null,
+    status: 'proposed',
+  }).select().single();
+  if (error) throw error;
+  return data as BookingPart;
+}
+
+export async function removePart(partId: string) {
+  const { error } = await supabase.from('booking_parts').delete().eq('id', partId);
+  if (error) throw error;
+}
+
+export async function respondToParts(bookingId: string, accept: boolean) {
+  const { error } = await supabase.from('booking_parts')
+    .update({ status: accept ? 'approved' : 'rejected',
+              responded_at: new Date().toISOString() })
+    .eq('booking_id', bookingId)
+    .eq('status', 'proposed');
+  if (error) throw error;
+}
+
+/** Parts the client has agreed to, and what each side gets from them. */
+export function partsSummary(parts: BookingPart[]) {
+  const approved = parts.filter(p => p.status === 'approved');
+  const proposed = parts.filter(p => p.status === 'proposed');
+
+  const approvedTotal = +approved.reduce((s,p)=>s+Number(p.total),0).toFixed(2);
+  const proposedTotal = +proposed.reduce((s,p)=>s+Number(p.total),0).toFixed(2);
+
+  return {
+    approved, proposed,
+    approvedTotal, proposedTotal,
+    commission:   +(approvedTotal * PARTS_COMMISSION).toFixed(2),
+    providerGets: +(approvedTotal * (1 - PARTS_COMMISSION)).toFixed(2),
+    hasPending: proposed.length > 0,
+  };
 }

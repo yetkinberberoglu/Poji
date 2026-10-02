@@ -60,6 +60,24 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `If you don't respond within 6 hours it's approved automatically.\n\n`
         + `${d.appUrl}`;
 
+    case 'time_proposed':
+      return `📅 *${d.cleanerName} suggests another time*\n\n`
+        + `You asked for ${d.oldDate} at ${d.oldTime}.\n`
+        + `They can come *${d.newDate} at ${d.newTime}* instead.\n\n`
+        + (d.note ? `"${d.note}"\n\n` : '')
+        + `Open Poji to accept or find someone else: ${d.appUrl}`;
+
+    case 'time_accepted':
+      return `✅ *New time confirmed*\n\n`
+        + `${d.date} at ${d.time}\n`
+        + `📍 ${d.address}\n\n`
+        + `See you then.`;
+
+    case 'time_declined':
+      return `😕 *That time didn't work for the client*\n\n`
+        + `${d.address} on ${d.date} at ${d.time} has gone back to the pool.\n\n`
+        + `No hard feelings — plenty more coming.`;
+
     case 'job_completed':
       return `🎉 *Job completed*\n\n`
         + `€${Number(d.earnings).toFixed(2)} will be paid to your account.\n\n`

@@ -15,7 +15,7 @@ export default function ServicesTab() {
        || t.desc.toLowerCase().includes(q.toLowerCase()));
 
   const open = (t: any) =>
-    t.roadside ? router.push('/roadside') : router.push(`/providers?trade=${t.id}`);
+    t.roadside ? router.push(`/roadside?trade=${t.id}`) : router.push(`/providers?trade=${t.id}`);
 
   const grouped = CATEGORIES
     .map(cat => ({ cat, items: list.filter(t => t.category === cat.id) }))
