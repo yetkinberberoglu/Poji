@@ -84,7 +84,7 @@ export default function ProviderScreen() {
       const { data:{ user } } = await supabase.auth.getUser();
       if (!user) return;
       const { data } = await supabase.from('cleaner_profiles')
-        .select('verification_status, submitted_at, rejection_reason, first_name, categories')
+        .select('verification_status, signup_stage, submitted_at, rejection_reason, first_name, categories')
         .eq('id', user.id).maybeSingle();
       if (data) { setMyStatus(data.verification_status); setMyApp(data); }
     })();
@@ -228,50 +228,99 @@ export default function ProviderScreen() {
         ))}
       </View>}
 
-      {myStatus && myStatus !== 'approved' && (
-        <View style={s0.pendingCard}>
-          <Text style={s0.pendingIcon}>⏳</Text>
-          <Text style={s0.pendingTitle}>Your account is being checked</Text>
-          <Text style={s0.pendingTxt}>
-            We're verifying your documents. This usually takes 1–2 working days.
-            Until then you won't appear to clients and can't take jobs.
-          </Text>
+      {myStatus !== 'approved' && (() => {
+        const stage = myApp?.signup_stage || 'basic';
+        const open  = active.length;
 
-          <View style={s0.pendingSteps}>
-            {[
-              ['✓', 'Application submitted',
-               myApp?.submitted_at
-                 ? new Date(myApp.submitted_at).toLocaleDateString('en-GB',
-                     {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})
-                 : 'Done', true],
-              ['2', 'We check your ID and documents', 'In progress', false],
-              ['3', 'Your profile goes live', 'Clients can book you', false],
-            ].map(([n,t,d,done]:any)=>(
-              <View key={t} style={s0.pStepRow}>
-                <View style={[s0.pStepDot, done&&s0.pStepDotOn]}>
-                  <Text style={[s0.pStepNum, done&&s0.pStepNumOn]}>{n}</Text>
-                </View>
-                <View style={{flex:1}}>
-                  <Text style={[s0.pStepTitle, done&&{color:C.green}]}>{t}</Text>
-                  <Text style={s0.pStepDesc}>{d}</Text>
-                </View>
+        // Not verified yet — show them the work, then the next step
+        if (myStatus === 'basic' || stage === 'basic') {
+          return (
+            <View style={s0.gateCard}>
+              <Text style={s0.gateIcon}>👀</Text>
+              <Text style={s0.gateTitle}>
+                {open > 0
+                  ? `${open} job${open===1?'':'s'} open in your areas`
+                  : 'No open jobs right now'}
+              </Text>
+              <Text style={s0.gateTxt}>
+                {open > 0
+                  ? "Have a look below. To accept one, we need to verify who you are — it takes about three minutes."
+                  : "Nothing waiting at this moment. Verify your account now and you'll be ready the second something comes in."}
+              </Text>
+
+              <View style={s0.gateSteps}>
+                {[
+                  ['✓','Trades and areas set','Done', true],
+                  ['2','Verify your identity','ID photo, a selfie and a profile picture', false],
+                  ['3','Add your bank details','Only when you are owed money', false],
+                ].map(([n,t,d,done]:any)=>(
+                  <View key={t} style={s0.gStepRow}>
+                    <View style={[s0.gStepDot, done&&s0.gStepDotOn]}>
+                      <Text style={[s0.gStepNum, done&&s0.gStepNumOn]}>{n}</Text>
+                    </View>
+                    <View style={{flex:1}}>
+                      <Text style={[s0.gStepTitle, done&&{color:C.green}]}>{t}</Text>
+                      <Text style={s0.gStepDesc}>{d}</Text>
+                    </View>
+                  </View>
+                ))}
               </View>
-            ))}
+
+              <TouchableOpacity style={s0.gateBtn} onPress={()=>router.push('/onboarding')}>
+                <Text style={s0.gateBtnTxt}>Verify my account  →</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+
+        // Documents in, waiting on us
+        return (
+          <View style={s0.pendingCard}>
+            <Text style={s0.pendingIcon}>⏳</Text>
+            <Text style={s0.pendingTitle}>We're checking your documents</Text>
+            <Text style={s0.pendingTxt}>
+              Usually done within a working day. You can browse jobs meanwhile —
+              you'll be able to accept them the moment you're approved.
+            </Text>
+
+            <View style={s0.pendingSteps}>
+              {[
+                ['✓', 'Application submitted',
+                 myApp?.submitted_at
+                   ? new Date(myApp.submitted_at).toLocaleDateString('en-GB',
+                       {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})
+                   : 'Done', true],
+                ['2', 'We check your ID and documents', 'In progress', false],
+                ['3', 'Your profile goes live', 'Clients can book you', false],
+              ].map(([n,t,d,done]:any)=>(
+                <View key={t} style={s0.pStepRow}>
+                  <View style={[s0.pStepDot, done&&s0.pStepDotOn]}>
+                    <Text style={[s0.pStepNum, done&&s0.pStepNumOn]}>{n}</Text>
+                  </View>
+                  <View style={{flex:1}}>
+                    <Text style={[s0.pStepTitle, done&&{color:C.green}]}>{t}</Text>
+                    <Text style={s0.pStepDesc}>{d}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            <TouchableOpacity style={s0.pendingBtn} onPress={()=>router.push('/onboarding')}>
+              <Text style={s0.pendingBtnTxt}>Review my application</Text>
+            </TouchableOpacity>
           </View>
+        );
+      })()}
 
-          <TouchableOpacity style={s0.pendingBtn} onPress={()=>router.push('/onboarding')}>
-            <Text style={s0.pendingBtnTxt}>Review my application</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {myStatus === 'approved' && (
+      {active.length > 0 && (
         <Text style={s0.sectionTitle}>
-          {active.length>0 ? `Active Jobs (${active.length})` : 'No active jobs · Pull to refresh'}
+          {myStatus === 'approved'
+            ? `Active Jobs (${active.length})`
+            : `Open near you (${active.length})`}
         </Text>
       )}
 
-      {myStatus === 'approved' && active.map(b => {
+      {active.map(b => {
         const st  = STATUS[b.status] || STATUS.pending;
         const pay = (b.total/1.029/1.18*0.80).toFixed(2);
         const isBusy = busy === b.id;
@@ -384,7 +433,12 @@ export default function ProviderScreen() {
                       <Text style={s0.poolTxt}>🌐  Open to all cleaners — first to accept gets it</Text>
                     </View>
                   )}
-                  {proposingFor === b.id ? (
+                  {myStatus !== 'approved' ? (
+                    <TouchableOpacity style={s0.lockedBtn}
+                      onPress={()=>router.push('/onboarding')}>
+                      <Text style={s0.lockedTxt}>🔒  Verify your account to take this job</Text>
+                    </TouchableOpacity>
+                  ) : proposingFor === b.id ? (
                     <ProposeTime
                       currentDate={b.date}
                       currentTime={b.time}
@@ -643,7 +697,7 @@ export default function ProviderScreen() {
         );
       })}
 
-      {myStatus === 'approved' && done.length>0 && (
+      {done.length>0 && (
         <>
           <Text style={s0.sectionTitle}>History ({done.length})</Text>
           {done.map(b=>{
@@ -765,6 +819,25 @@ const s0 = StyleSheet.create({
   primaryBtn:{backgroundColor:C.primary,borderRadius:12,paddingVertical:14,alignItems:'center'},
   whiteBtnTxt:{color:C.white,fontWeight:'700',fontSize:15},
   dis:{opacity:0.5},
+  lockedBtn:{backgroundColor:C.bgAlt,borderRadius:12,paddingVertical:14,alignItems:'center',
+    borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
+  lockedTxt:{fontSize:13,fontWeight:'700',color:C.primary},
+  gateCard:{marginHorizontal:20,marginBottom:20,backgroundColor:C.white,borderRadius:20,
+    padding:20,gap:10,borderWidth:1,borderColor:C.border,...S.sm},
+  gateIcon:{fontSize:40,textAlign:'center'},
+  gateTitle:{fontSize:18,fontWeight:'800',color:C.dark,textAlign:'center'},
+  gateTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
+  gateSteps:{gap:12,marginTop:10,marginBottom:4},
+  gStepRow:{flexDirection:'row',gap:12,alignItems:'flex-start'},
+  gStepDot:{width:26,height:26,borderRadius:13,backgroundColor:C.bgAlt,borderWidth:2,
+    borderColor:C.border,alignItems:'center',justifyContent:'center'},
+  gStepDotOn:{backgroundColor:C.green,borderColor:C.green},
+  gStepNum:{fontSize:11,fontWeight:'800',color:C.muted},
+  gStepNumOn:{color:C.white},
+  gStepTitle:{fontSize:13,fontWeight:'700',color:C.text},
+  gStepDesc:{fontSize:11,color:C.muted,marginTop:2},
+  gateBtn:{backgroundColor:C.primary,borderRadius:14,paddingVertical:15,alignItems:'center',marginTop:4},
+  gateBtnTxt:{fontSize:15,fontWeight:'700',color:C.white},
   proposeBtn:{borderWidth:1.5,borderColor:C.teal,borderRadius:12,paddingVertical:12,
     alignItems:'center',backgroundColor:C.white},
   proposeTxt:{fontSize:13,fontWeight:'700',color:C.teal},

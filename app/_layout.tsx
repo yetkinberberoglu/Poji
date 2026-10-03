@@ -23,12 +23,19 @@ async function redirect() {
 
   if (role === 'cleaner') {
     const { data: app } = await supabase
-      .from('cleaner_profiles').select('verification_status').eq('id', user.id).maybeSingle();
-    // Only push them back into the form when there's nothing submitted yet,
-    // or we sent it back for changes. Otherwise the dashboard shows their status.
-    const st = app?.verification_status;
-    if (!app || st === 'draft' || st === 'rejected') router.replace('/onboarding');
-    else router.replace('/(provider)/jobs');
+      .from('cleaner_profiles')
+      .select('signup_stage, verification_status')
+      .eq('id', user.id).maybeSingle();
+
+    // Nothing started — the short version first
+    if (!app || !app.signup_stage) { router.replace('/join'); return; }
+
+    // Sent back for changes
+    if (app.verification_status === 'rejected') { router.replace('/onboarding'); return; }
+
+    // Everyone else lands in the app. What they can do there depends on
+    // how far through they are — the Jobs tab handles that.
+    router.replace('/(provider)/jobs');
     return;
   }
 
@@ -58,6 +65,8 @@ export default function RootLayout() {
         <Stack.Screen name="auth" />
         <Stack.Screen name="verify-email" />
         <Stack.Screen name="client-setup" />
+        <Stack.Screen name="join" />
+        <Stack.Screen name="payout" />
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="admin" />
         <Stack.Screen name="(tabs)" />

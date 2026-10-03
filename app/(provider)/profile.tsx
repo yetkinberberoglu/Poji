@@ -130,6 +130,7 @@ export default function ProviderProfile() {
             f.status==='approved' ? {color:C.green} : f.status==='rejected' ? {color:C.red} : {color:C.amber}]}>
             {f.status==='approved' ? '✓ Verified'
               : f.status==='rejected' ? '⚠️ Needs changes'
+              : f.status==='basic'    ? '○ Not verified yet'
               : '⏳ Under review'}
           </Text>
         </View>
@@ -165,8 +166,21 @@ export default function ProviderProfile() {
         </View>
       )}
 
+      {(f.status === 'basic' || !f.status) && (
+        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/onboarding')}>
+          <Text style={s.verifyIcon}>🪪</Text>
+          <View style={{flex:1}}>
+            <Text style={s.verifyTitle}>Verify your account</Text>
+            <Text style={s.verifyTxt}>
+              Three minutes. Until then you can see jobs but not take them.
+            </Text>
+          </View>
+          <Text style={s.verifyGo}>›</Text>
+        </TouchableOpacity>
+      )}
+
       {/* ── availability ── */}
-      <View style={s.availCard}>
+      {f.status === 'approved' && <View style={s.availCard}>
         <View style={{flex:1}}>
           <Text style={s.availTitle}>
             {f.available ? 'Taking work' : 'Not taking work'}
@@ -183,7 +197,7 @@ export default function ProviderProfile() {
           trackColor={{ false:C.border, true:C.green }}
           thumbColor={C.white}
         />
-      </View>
+      </View>}
 
       {/* ══ TRADES ══ */}
       <Row
@@ -403,45 +417,11 @@ export default function ProviderProfile() {
         </View>
       )}
 
-      {/* ══ PAYMENT ══ */}
       <Row
         icon="🏦" title="Getting paid"
-        value={f.iban ? formatIban(f.iban).slice(0,13) + '…' : 'Not set'}
-        open={open==='payment'} onPress={()=>setOpen(open==='payment'?null:'payment')}
+        value={f.iban ? formatIban(f.iban).slice(0,13) + '…' : 'Not set yet'}
+        open={false} onPress={()=>router.push('/payout')}
       />
-      {open==='payment' && (
-        <View style={s.panel}>
-          <Text style={s.lbl}>Account holder</Text>
-          <TextInput style={s.input} value={f.account_holder}
-            onChangeText={(t:string)=>set('account_holder',t)}
-            placeholder="As your bank has it" placeholderTextColor={C.muted} />
-
-          <Text style={s.lbl}>IBAN</Text>
-          <TextInput style={s.input} value={f.iban}
-            onChangeText={(t:string)=>set('iban', t.toUpperCase())}
-            onBlur={()=>set('iban', formatIban(f.iban))}
-            placeholder="MT84 MALT …" placeholderTextColor={C.muted} autoCapitalize="characters" />
-          {f.iban.length > 4 && (() => {
-            const r = validateIban(f.iban);
-            return <Text style={[s.note,{color: r.ok ? C.green : C.red}]}>
-              {r.ok ? '✓ Checks out' : r.reason}
-            </Text>;
-          })()}
-
-          <Text style={s.lbl}>Bank</Text>
-          <TextInput style={s.input} value={f.bank_name}
-            onChangeText={(t:string)=>set('bank_name',t)}
-            placeholder="BOV, HSBC, Revolut…" placeholderTextColor={C.muted} />
-
-          <SaveBtn busy={saving}
-            disabled={!validateIban(f.iban).ok}
-            onPress={()=>save({
-              iban: f.iban.replace(/\s+/g,'').toUpperCase(),
-              bank_name: f.bank_name.trim(),
-              account_holder: f.account_holder.trim(),
-            })} />
-        </View>
-      )}
 
       {/* ══ static links ══ */}
       <Text style={s.sectionTitle}>Account</Text>
@@ -522,6 +502,12 @@ const s = StyleSheet.create({
     borderWidth:1,borderColor:'#FECACA'},
   errTxt:{fontSize:13,color:C.red,fontWeight:'600'},
 
+  verifyCard:{flexDirection:'row',alignItems:'center',gap:12,marginHorizontal:20,marginTop:18,
+    backgroundColor:C.primaryLt,borderRadius:16,padding:16,borderWidth:1.5,borderColor:C.primary},
+  verifyIcon:{fontSize:24},
+  verifyTitle:{fontSize:15,fontWeight:'800',color:C.primary},
+  verifyTxt:{fontSize:12,color:C.text,marginTop:3,lineHeight:17},
+  verifyGo:{fontSize:22,color:C.primary},
   standingCard:{marginHorizontal:20,marginTop:18,backgroundColor:C.redLt,borderRadius:16,
     padding:16,gap:6,borderWidth:1,borderColor:'#FECACA'},
   standingTitle:{fontSize:15,fontWeight:'800',color:C.red},
