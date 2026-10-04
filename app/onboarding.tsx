@@ -15,7 +15,7 @@ import {
   ageFrom, isFutureDate,
 } from '../constants/malta';
 
-const STEPS = ['You', 'Documents', 'Right to work', 'Your work', 'Getting paid'];
+const STEPS = ['About you', 'Documents', 'Right to work'];
 
 const ID_TYPES = [
   { k:'malta_id',         label:'Malta ID',          hint:'7 digits plus a letter, e.g. 0123456M' },
@@ -189,9 +189,10 @@ export default function Onboarding() {
         if (!f.company_name.trim()) m.push('Company name');
         if (!f.company_reg_number.trim()) m.push('Company registration number');
       }
+      if (!f.accepted_commission) m.push('Accept the 20% commission to continue');
     }
 
-    if (s===3) {
+    if (s===99) {
       if (!f.categories.length) m.push('At least one trade');
       if (hasHourly) {
         if (!f.hourly_rate || Number(f.hourly_rate) <= 0) m.push('Your hourly rate');
@@ -210,13 +211,7 @@ export default function Onboarding() {
       }
     }
 
-    if (s===4) {
-      if (!f.account_holder.trim()) m.push('Account holder name');
-      const ib = validateIban(f.iban);
-      if (!ib.ok) m.push('IBAN — ' + ib.reason);
-      if (!f.bank_name.trim()) m.push('Bank name');
-      if (!f.accepted_commission) m.push('Accept the 20% commission to continue');
-    }
+
 
     return m;
   };
@@ -268,6 +263,7 @@ export default function Onboarding() {
     accepted_commission:!!f.accepted_commission,
     accepted_terms_at: final ? new Date().toISOString() : null,
     verification_status: final ? 'submitted' : 'draft',
+    signup_stage: final ? 'verified' : 'basic',
     submitted_at: final ? new Date().toISOString() : null,
     updated_at: new Date().toISOString(),
   });
@@ -358,7 +354,7 @@ export default function Onboarding() {
         <TouchableOpacity onPress={()=>step>0?setStep(step-1):router.back()}>
           <Text style={st.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={st.title}>Become a Provider</Text>
+        <Text style={st.title}>Verify your account</Text>
         <Text style={st.stepNum}>{step+1}/{STEPS.length}</Text>
       </View>
 
@@ -391,10 +387,18 @@ export default function Onboarding() {
         {/* ══ 0 · YOU ══ */}
         {step===0 && (
           <View style={st.step}>
-            <Text style={st.sectionHint}>
-              We verify everyone who works through Poji. Clients are letting you into
-              their homes, so this has to be real.
-            </Text>
+            <View style={st.whyBox}>
+              <Text style={st.whyTitle}>Why we ask for this</Text>
+              <Text style={st.whyTxt}>
+                Clients are letting a stranger into their home. Every provider on Poji
+                is ID-checked, and clients can see that badge on your profile — it is
+                the single biggest reason someone picks you over a classified ad.
+              </Text>
+              <Text style={st.whyTxt}>
+                Your documents are encrypted and seen only by our verification team.
+                Clients never see them.
+              </Text>
+            </View>
 
             <View style={st.row2}>
               <View style={{flex:1}}>
@@ -650,312 +654,14 @@ export default function Onboarding() {
                 </View>
               </>
             )}
-          </View>
-        )}
-
-        {/* ══ 3 · YOUR WORK ══ */}
-        {step===3 && (
-          <View style={st.step}>
-            <Text style={st.sectionHint}>
-              Pick everything you're genuinely qualified for. Clients only see the
-              trades you choose here.
-            </Text>
-
-            {f.categories.length > 0 && (
-              <View style={st.pickedBar}>
-                <Text style={st.pickedTxt}>
-                  {f.categories.length} trade{f.categories.length>1?'s':''} selected
-                </Text>
-                <TouchableOpacity onPress={()=>set('categories', [])}>
-                  <Text style={st.pickedClear}>Clear all</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {CATEGORIES.map(cat=>{
-              const items  = tradesIn(cat.id);
-              const chosen = items.filter(t=>f.categories.includes(t.id)).length;
-              return (
-                <View key={cat.id} style={st.tradeGroup}>
-                  <View style={st.tradeGroupHead}>
-                    <Text style={st.tradeGroupTitle}>{cat.icon}  {cat.name}</Text>
-                    {chosen > 0 && (
-                      <View style={st.tradeGroupCount}>
-                        <Text style={st.tradeGroupCountTxt}>{chosen}</Text>
-                      </View>
-                    )}
-                  </View>
-                  <View style={st.tradeWrap}>
-                    {items.map(t=>{
-                      const on = f.categories.includes(t.id);
-                      return (
-                        <TouchableOpacity key={t.id} style={[st.tradePill, on&&st.tradePillOn]}
-                          onPress={()=>set('categories', on
-                            ? f.categories.filter((x:string)=>x!==t.id)
-                            : [...f.categories, t.id])}>
-                          <Text style={[st.tradePillTxt, on&&st.tradePillTxtOn]}>
-                            {on ? '✓ ' : ''}{t.icon}  {t.name}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
-              );
-            })}
-
-            {hasRoad && (
-              <View style={st.roadBox}>
-                <Text style={st.roadTitle}>🛞  Roadside work</Text>
-                <Text style={st.roadTxt}>
-                  Callouts pay a fixed price per job, not by the hour. You see the
-                  price and the client's GPS before you accept.
-                </Text>
-                <TouchableOpacity style={[st.checkRow, f.accepts_urgent&&st.checkRowOn]}
-                  onPress={()=>set('accepts_urgent', !f.accepts_urgent)}>
-                  <View style={[st.check, f.accepts_urgent&&st.checkOn]}>
-                    {f.accepts_urgent && <Text style={st.checkTxt}>✓</Text>}
-                  </View>
-                  <View style={{flex:1}}>
-                    <Text style={st.optLabel}>I take emergency callouts</Text>
-                    <Text style={st.optDesc}>Drop everything and go. These pay 25% more.</Text>
-                  </View>
-                </TouchableOpacity>
-                <Text style={st.lbl}>How far will you travel?</Text>
-                <View style={st.chips}>
-                  {[5,10,15,25,40].map(km=>(
-                    <TouchableOpacity key={km} style={[st.chip, Number(f.service_radius_km)===km&&st.chipOn]}
-                      onPress={()=>set('service_radius_km', km)}>
-                      <Text style={[st.chipTxt, Number(f.service_radius_km)===km&&st.chipTxtOn]}>{km} km</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {hasHourly && (
-              <>
-                <Text style={st.divider}>Your rate</Text>
-                <Text style={st.fieldNote}>
-                  {hasFixed
-                    ? 'This covers your hourly trades. Fixed-price callouts use the rates set for each job type.'
-                    : 'You set this. Poji adds VAT and keeps a 20% commission.'}
-                </Text>
-                <Text style={st.lbl}>Hourly rate (EUR)</Text>
-                <TextInput style={st.inputBig} value={String(f.hourly_rate)}
-                  onChangeText={(t:string)=>set('hourly_rate',t.replace(/[^0-9.]/g,''))}
-                  placeholder="—" placeholderTextColor={C.muted} keyboardType="decimal-pad" />
-                <Text style={st.fieldNote}>
-                  What people in Malta typically charge: cleaning €12–18, gardening €15–22,
-                  handyman €20–30, electrician and plumber €30–45, specialist trades €40–60.
-                  Set what your work is worth.
-                </Text>
-
-                <View style={st.calcBox}>
-                  <View style={st.calcRow}>
-                    <Text style={st.calcLbl}>Client pays per hour</Text>
-                    <Text style={st.calcVal}>€{(Number(f.hourly_rate||0)*1.18).toFixed(2)}</Text>
-                  </View>
-                  <View style={st.calcRow}>
-                    <Text style={st.calcLbl}>You keep (80%)</Text>
-                    <Text style={[st.calcVal,{color:C.green}]}>€{(Number(f.hourly_rate||0)*0.8).toFixed(2)}</Text>
-                  </View>
-                  <View style={st.calcRow}>
-                    <Text style={st.calcLbl}>Poji commission (20%)</Text>
-                    <Text style={st.calcVal}>€{(Number(f.hourly_rate||0)*0.2).toFixed(2)}</Text>
-                  </View>
-                </View>
-
-                <Text style={st.lbl}>Minimum hours per job</Text>
-                <View style={st.chips}>
-                  {[1,1.5,2,2.5,3,4].map(h=>(
-                    <TouchableOpacity key={h} style={[st.chip, Number(f.min_hours)===h&&st.chipOn]}
-                      onPress={()=>set('min_hours',h)}>
-                      <Text style={[st.chipTxt, Number(f.min_hours)===h&&st.chipTxtOn]}>{h}h</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={st.lbl}>Do you bring your own materials?</Text>
-                <View style={st.chips}>
-                  {[{k:true,l:'Yes, I bring everything'},{k:false,l:'No, client provides'}].map(o=>(
-                    <TouchableOpacity key={String(o.k)}
-                      style={[st.chip, f.brings_own_supplies===o.k&&st.chipOn]}
-                      onPress={()=>set('brings_own_supplies',o.k)}>
-                      <Text style={[st.chipTxt, f.brings_own_supplies===o.k&&st.chipTxtOn]}>{o.l}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </>
-            )}
-
-            <Text style={st.divider}>Where do you work?</Text>
-            <TouchableOpacity style={[st.checkRow, f.covers_all_malta&&st.checkRowOn]}
-              onPress={()=>set('covers_all_malta', !f.covers_all_malta)}>
-              <View style={[st.check, f.covers_all_malta&&st.checkOn]}>
-                {f.covers_all_malta && <Text style={st.checkTxt}>✓</Text>}
-              </View>
-              <View style={{flex:1}}>
-                <Text style={st.optLabel}>All of Malta</Text>
-                <Text style={st.optDesc}>Every locality on the main island</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={[st.checkRow, f.covers_all_gozo&&st.checkRowOn]}
-              onPress={()=>set('covers_all_gozo', !f.covers_all_gozo)}>
-              <View style={[st.check, f.covers_all_gozo&&st.checkOn]}>
-                {f.covers_all_gozo && <Text style={st.checkTxt}>✓</Text>}
-              </View>
-              <View style={{flex:1}}>
-                <Text style={st.optLabel}>All of Gozo and Comino</Text>
-                <Text style={st.optDesc}>Including the ferry crossing</Text>
-              </View>
-            </TouchableOpacity>
-
-            {!(f.covers_all_malta && f.covers_all_gozo) && (
-              <>
-                <Text style={st.fieldNote}>
-                  Pick every area you'd actually drive to.
-                </Text>
-                <MultiPicker
-                  values={f.service_areas}
-                  options={
-                    f.covers_all_malta ? GOZO_LOCALITIES :
-                    f.covers_all_gozo  ? MALTA_MAIN :
-                    MALTA_LOCALITIES
-                  }
-                  onChange={(v)=>set('service_areas', v)}
-                  placeholder="Choose your areas"
-                  title="Where do you work?"
-                />
-              </>
-            )}
-
-            <Text style={st.divider}>Insurance</Text>
-            <Text style={st.fieldNote}>
-              Poji does not insure your work. Public liability cover protects you if
-              something gets damaged — and clients trust insured providers more.
-            </Text>
-            <TouchableOpacity style={[st.checkRow, f.has_insurance&&st.checkRowOn]}
-              onPress={()=>set('has_insurance', !f.has_insurance)}>
-              <View style={[st.check, f.has_insurance&&st.checkOn]}>
-                {f.has_insurance && <Text style={st.checkTxt}>✓</Text>}
-              </View>
-              <View style={{flex:1}}>
-                <Text style={st.optLabel}>I hold public liability insurance</Text>
-                <Text style={st.optDesc}>We'll show an "Insured" badge on your profile</Text>
-              </View>
-            </TouchableOpacity>
-
-            {f.has_insurance && (
-              <>
-                <View style={st.row2}>
-                  <View style={{flex:1}}>
-                    <Text style={st.lbl}>Insurer</Text>
-                    <TextInput style={st.input} value={f.insurance_provider}
-                      onChangeText={(t:string)=>set('insurance_provider',t)}
-                      placeholder="e.g. Mapfre MSV" placeholderTextColor={C.muted} />
-                  </View>
-                  <View style={{flex:1}}>
-                    <Text style={st.lbl}>Policy number</Text>
-                    <TextInput style={st.input} value={f.insurance_policy_no}
-                      onChangeText={(t:string)=>set('insurance_policy_no',t)}
-                      placeholder="Policy no." placeholderTextColor={C.muted} />
-                  </View>
-                </View>
-                <Text style={st.lbl}>Expires</Text>
-                {Platform.OS === 'web' ? (
-                  // @ts-ignore
-                  <input type="date" value={f.insurance_expiry}
-                    min={new Date().toISOString().slice(0,10)}
-                    onChange={(e:any)=>set('insurance_expiry', e.target.value)}
-                    style={{
-                      backgroundColor:'#fff', borderRadius:14, padding:14, fontSize:15,
-                      color:'#374151', border:`1.5px solid ${C.border}`, width:'100%',
-                      fontFamily:'inherit', boxSizing:'border-box',
-                    }} />
-                ) : (
-                  <TextInput style={st.input} value={f.insurance_expiry}
-                    onChangeText={(t:string)=>set('insurance_expiry',t)}
-                    placeholder="YYYY-MM-DD" placeholderTextColor={C.muted} />
-                )}
-                <Upload label="Policy document" field="insurance_doc_url"
-                  value={f.insurance_doc_url} preview={previews.insurance_doc_url}
-                  uploading={uploading==='insurance_doc_url'}
-                  onPress={()=>pickFile('insurance_doc_url')}
-                  hint="Optional, but it speeds up your approval." />
-              </>
-            )}
-
-            <Text style={st.divider}>About you</Text>
-            <Text style={st.fieldNote}>
-              A few honest lines. What you're good at, how long you've done it,
-              anything that makes a client pick you.
-            </Text>
-            <TextInput style={[st.input,{minHeight:110}]} value={f.bio}
-              onChangeText={(t:string)=>set('bio',t)}
-              placeholder="Eight years in hotel housekeeping. I'm thorough with kitchens and bathrooms and I always arrive on time."
-              placeholderTextColor={C.muted} multiline textAlignVertical="top" />
-            <Text style={st.fieldNote}>{f.bio.length} characters</Text>
-          </View>
-        )}
-
-        {/* ══ 4 · GETTING PAID ══ */}
-        {step===4 && (
-          <View style={st.step}>
-            <Text style={st.sectionHint}>
-              We pay out to this account after each job is approved. The name must
-              match your ID, or the bank will reject the transfer.
-            </Text>
-
-            <Text style={st.lbl}>Account holder name</Text>
-            <TextInput style={st.input} value={f.account_holder}
-              onChangeText={(t:string)=>set('account_holder',t)}
-              placeholder="Exactly as your bank has it" placeholderTextColor={C.muted} />
-            {f.account_holder && f.first_name && f.last_name &&
-              !f.account_holder.toLowerCase().includes(f.last_name.toLowerCase()) && (
-              <Text style={[st.fieldNote,{color:C.amber}]}>
-                This doesn't match "{f.first_name} {f.last_name}" — make sure it's right.
-              </Text>
-            )}
-
-            <Text style={st.lbl}>IBAN</Text>
-            <TextInput style={st.input} value={f.iban}
-              onChangeText={(t:string)=>set('iban',t.toUpperCase())}
-              onBlur={()=>set('iban', formatIban(f.iban))}
-              placeholder="MT84 MALT 0110 0001 2345 MTLC AST0 01S"
-              placeholderTextColor={C.muted} autoCapitalize="characters" />
-            {f.iban.length > 4 && (() => {
-              const r = validateIban(f.iban);
-              return (
-                <Text style={[st.fieldNote, { color: r.ok ? C.green : C.red }]}>
-                  {r.ok ? '✓ That IBAN checks out' : r.reason}
-                </Text>
-              );
-            })()}
-
-            <Text style={st.lbl}>Bank</Text>
-            <Picker
-              value={BANKS.includes(f.bank_name) ? f.bank_name : (f.bank_name ? 'Other' : '')}
-              options={BANKS}
-              onChange={(v)=>set('bank_name', v === 'Other' ? '' : v)}
-              placeholder="Choose your bank"
-              title="Your bank"
-              searchable={false}
-            />
-            {(f.bank_name === '' || !BANKS.includes(f.bank_name)) && f.iban && (
-              <TextInput style={[st.input,{marginTop:10}]} value={f.bank_name}
-                onChangeText={(t:string)=>set('bank_name',t)}
-                placeholder="Type your bank name" placeholderTextColor={C.muted} />
-            )}
 
             <View style={st.commissionBox}>
-              <Text style={st.commissionTitle}>How you get paid</Text>
+              <Text style={st.commissionTitle}>Before you submit</Text>
               {[
-                ['Client approves the work', 'You have the job marked complete and they confirm'],
-                ['Poji keeps 20%',           'Taken from the job value before VAT'],
-                ['You get 80%',              'Paid to your IBAN'],
-                ['VAT is handled',           'Poji issues the VAT invoice on your behalf'],
+                ['Poji keeps 20%',       'Taken from the job value before VAT'],
+                ['You keep 80%',         'Paid to your bank after the client approves'],
+                ['VAT is handled',       'Poji issues the invoice on your behalf'],
+                ['Bank details later',   'We only ask when you are actually owed money'],
               ].map(([a,b])=>(
                 <View key={a} style={st.commissionRow}>
                   <Text style={st.commissionDot}>•</Text>
@@ -987,42 +693,11 @@ export default function Onboarding() {
               </View>
             </TouchableOpacity>
 
-            <View style={st.summaryBox}>
-              <Text style={st.summaryTitle}>Ready to submit</Text>
-              {[
-                ['Name',    `${f.first_name} ${f.last_name}`],
-                ['Trades',  f.categories.map((id:string)=>findTrade(id)?.name).filter(Boolean).join(', ') || '—'],
-                ['Works',   f.covers_all_malta && f.covers_all_gozo ? 'All Malta and Gozo'
-                            : f.covers_all_malta ? 'All Malta'
-                            : f.covers_all_gozo  ? 'All Gozo'
-                            : `${f.service_areas.length} areas`],
-                ...(hasHourly ? [['Rate', `€${f.hourly_rate}/hr · min ${f.min_hours}h`]] : []),
-                ['Insured', f.has_insurance ? `Yes · ${f.insurance_provider}` : 'No'],
-                ['Paid to', formatIban(f.iban) || '—'],
-              ].map(([k,v])=>(
-                <View key={k} style={st.summaryRow}>
-                  <Text style={st.summaryKey}>{k}</Text>
-                  <Text style={st.summaryVal}>{v}</Text>
-                </View>
-              ))}
-            </View>
-
             <View style={st.noteBox}>
               <Text style={st.noteTxt}>
                 By submitting you confirm everything here is true. False documents mean
                 a permanent ban and, where relevant, a report to the police.
               </Text>
-            </View>
-
-            <View style={st.gdprBox}>
-              <Text style={st.gdprTitle}>🔒  Your documents</Text>
-              <Text style={st.gdprTxt}>
-                Encrypted, seen only by our verification team, kept for 5 years after
-                you leave. Ask for a copy or deletion any time.
-              </Text>
-              <TouchableOpacity onPress={()=>router.push('/legal?doc=privacy')}>
-                <Text style={st.gdprLink}>Read the full Privacy Notice ›</Text>
-              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -1089,6 +764,10 @@ const st = StyleSheet.create({
   dotLblLocked:{opacity:0.4},
   body:{flex:1,paddingHorizontal:20},
   step:{paddingBottom:16},
+  whyBox:{backgroundColor:C.primaryLt,borderRadius:16,padding:16,gap:8,marginTop:10,
+    borderWidth:1,borderColor:C.border},
+  whyTitle:{fontSize:14,fontWeight:'800',color:C.primary},
+  whyTxt:{fontSize:12,color:C.text,lineHeight:18},
   sectionHint:{fontSize:13,color:C.muted,lineHeight:19,marginTop:8,marginBottom:6},
   divider:{fontSize:14,fontWeight:'800',color:C.dark,marginTop:28,marginBottom:4},
   lbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginTop:16,marginBottom:8},

@@ -95,8 +95,8 @@ export default function Auth() {
                 </View>
                 {role === 'cleaner' && (
                   <Text style={s.roleNote}>
-                    You'll pick your trades next — cleaning, electrical, plumbing,
-                    roadside and more. Choose as many as you cover.
+                    Two minutes to get listed. Pick your trades and areas, see the
+                    work near you — ID and bank details come later.
                   </Text>
                 )}
               </View>

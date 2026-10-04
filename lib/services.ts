@@ -5,13 +5,34 @@ export type ServiceType = {
   multiplier: number; min_hours: number; base_minutes: number;
   icon: string; sort_order: number;
   category?: string;
-  pricing_model?: 'hourly' | 'fixed';
+  pricing_model?: 'hourly' | 'fixed' | 'quote';
   fixed_price?: number | null;
   callout_fee?: number | null;
   typical_minutes?: number | null;
   needs_location?: boolean;
   trade_id?: string | null;
   allows_parts?: boolean;
+  labour_price?: number | null;
+  parts_price?: number | null;
+  parts_label?: string | null;
+  price_min?: number | null;
+  price_max?: number | null;
+  quote_prompt?: string | null;
+};
+
+/** A provider's own price for a service they offer */
+export type ProviderService = {
+  id: string;
+  provider_id: string;
+  service_type_id: string;
+  active: boolean;
+  labour_price: number | null;
+  parts_price: number | null;
+  parts_label: string | null;
+  price_min: number | null;
+  price_max: number | null;
+  typical_minutes: number | null;
+  note: string | null;
 };
 
 export type ServiceExtra = {
@@ -201,36 +222,51 @@ export const fmtDuration = (mins: number) => {
 };
 
 
+/** Commission on parts — deliberately low so nobody routes around it. */
+export const PARTS_COMMISSION = 0.05;
+
 /**
- * Callout jobs — roadside and similar. One agreed price plus a callout fee.
- * No timer, no hourly maths: the client knows the number before anyone sets off.
+ * Fixed-price work — a filter service, an AC regas, a puncture.
+ * Labour and parts are priced separately because we take a different
+ * cut of each: 20% of the work, 5% of the materials.
  */
+export const LABOUR_COMMISSION = 0.20;
+
 export function fixedQuote(opts: {
-  fixedPrice: number;
-  calloutFee: number;
+  labourPrice: number;
+  partsPrice?: number;
+  calloutFee?: number;
   urgent?: boolean;
 }) {
-  const URGENT_SURCHARGE = 0.25;   // 25% for "come now"
-  const VAT_RATE   = 0.18;
-  const COMMISSION = 0.20;
+  const URGENT_SURCHARGE = 0.25;
+  const VAT_RATE = 0.18;
 
-  const base    = Number(opts.fixedPrice) + Number(opts.calloutFee || 0);
-  const urgent  = opts.urgent ? +(base * URGENT_SURCHARGE).toFixed(2) : 0;
-  const exVat   = +(base + urgent).toFixed(2);
-  const vat     = +(exVat * VAT_RATE).toFixed(2);
-  const service = +(exVat + vat).toFixed(2);
-  const stripe  = +(service * 0.029 + 0.30).toFixed(2);
+  const labour  = Number(opts.labourPrice) || 0;
+  const callout = Number(opts.calloutFee)  || 0;
+  const parts   = Number(opts.partsPrice)  || 0;
+
+  // Urgency is a premium on the work, never on the parts
+  const urgentFee = opts.urgent ? +((labour + callout) * URGENT_SURCHARGE).toFixed(2) : 0;
+
+  const labourSide = +(labour + callout + urgentFee).toFixed(2);
+  const exVat      = +(labourSide + parts).toFixed(2);
+  const vat        = +(exVat * VAT_RATE).toFixed(2);
+  const service    = +(exVat + vat).toFixed(2);
+  const stripe     = +(service * 0.029 + 0.30).toFixed(2);
+
+  const labourCommission = +(labourSide * LABOUR_COMMISSION).toFixed(2);
+  const partsCommission  = +(parts * PARTS_COMMISSION).toFixed(2);
 
   return {
-    jobPrice:   Number(opts.fixedPrice),
-    calloutFee: Number(opts.calloutFee || 0),
-    urgentFee:  urgent,
-    exVat,
-    vat,
-    stripeFee:  stripe,
+    labour, callout, parts, urgentFee,
+    labourSide,
+    exVat, vat,
+    stripeFee: stripe,
     clientPays: +(service + stripe).toFixed(2),
-    providerGets: +(exVat * (1 - COMMISSION)).toFixed(2),
-    platform:     +(exVat * COMMISSION).toFixed(2),
+    labourCommission,
+    partsCommission,
+    platform: +(labourCommission + partsCommission).toFixed(2),
+    providerGets: +(labourSide - labourCommission + parts - partsCommission).toFixed(2),
   };
 }
 
@@ -249,8 +285,6 @@ export function distanceKm(
 }
 
 
-/** Commission we take on parts — deliberately low so nobody routes around it. */
-export const PARTS_COMMISSION = 0.05;
 
 export type BookingPart = {
   id: string;
@@ -321,4 +355,88 @@ export function partsSummary(parts: BookingPart[]) {
     providerGets: +(approvedTotal * (1 - PARTS_COMMISSION)).toFixed(2),
     hasPending: proposed.length > 0,
   };
+}
+
+
+/** Everything a provider has priced, keyed by service id */
+export async function loadProviderServices(providerId: string) {
+  const { data, error } = await supabase
+    .from('provider_services').select('*')
+    .eq('provider_id', providerId);
+  if (error) { console.log('loadProviderServices:', error.message); return {}; }
+  const map: Record<string, ProviderService> = {};
+  (data || []).forEach((r:any) => { map[r.service_type_id] = r; });
+  return map;
+}
+
+/** Prices for several providers at once — used on the choose-a-provider step */
+export async function loadServicePrices(serviceTypeId: string) {
+  const { data, error } = await supabase
+    .from('provider_services').select('*')
+    .eq('service_type_id', serviceTypeId)
+    .eq('active', true);
+  if (error) { console.log('loadServicePrices:', error.message); return {}; }
+  const map: Record<string, ProviderService> = {};
+  (data || []).forEach((r:any) => { map[r.provider_id] = r; });
+  return map;
+}
+
+/**
+ * The provider's own numbers where they set them, the platform's where
+ * they haven't. Nobody is forced to price everything up front.
+ */
+export function effectiveService(
+  type: ServiceType,
+  own?: ProviderService | null,
+): {
+  labour: number; parts: number; partsLabel: string | null;
+  minutes: number; priceMin: number | null; priceMax: number | null;
+  custom: boolean;
+} {
+  const num = (a: any, b: any) => {
+    const v = a ?? b;
+    return v == null ? 0 : Number(v);
+  };
+  return {
+    labour:     num(own?.labour_price,    type.labour_price),
+    parts:      num(own?.parts_price,     type.parts_price),
+    partsLabel: own?.parts_label ?? type.parts_label ?? null,
+    minutes:    num(own?.typical_minutes, type.typical_minutes) || 60,
+    priceMin:   own?.price_min != null ? Number(own.price_min)
+                : type.price_min != null ? Number(type.price_min) : null,
+    priceMax:   own?.price_max != null ? Number(own.price_max)
+                : type.price_max != null ? Number(type.price_max) : null,
+    custom:     !!own,
+  };
+}
+
+/** Seed a provider's list from the platform defaults for their trades */
+export async function seedProviderServices(providerId: string, tradeIds: string[]) {
+  if (!tradeIds.length) return;
+
+  const { data: types } = await supabase
+    .from('service_types').select('*')
+    .in('trade_id', tradeIds).eq('active', true);
+  if (!types?.length) return;
+
+  const { data: existing } = await supabase
+    .from('provider_services').select('service_type_id')
+    .eq('provider_id', providerId);
+  const have = new Set((existing || []).map((r:any) => r.service_type_id));
+
+  const rows = types
+    .filter((t:any) => !have.has(t.id))
+    .map((t:any) => ({
+      provider_id: providerId,
+      service_type_id: t.id,
+      active: true,
+      labour_price: t.labour_price,
+      parts_price: t.parts_price,
+      parts_label: t.parts_label,
+      price_min: t.price_min,
+      price_max: t.price_max,
+      typical_minutes: t.typical_minutes,
+    }));
+
+  if (rows.length) await supabase.from('provider_services').insert(rows);
 }

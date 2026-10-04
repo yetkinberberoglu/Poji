@@ -32,7 +32,8 @@ export default function Services() {
 
   const open = (t: Trade) => {
     if (t.roadside) { router.push(`/roadside?trade=${t.id}`); return; }
-    router.push(`/providers?trade=${t.id}`);
+    // Say what you need first — we find who can do it afterwards
+    router.push(`/booking?trade=${t.id}`);
   };
 
   if (!cat) {
@@ -97,8 +98,7 @@ export default function Services() {
               <Text style={s.cardName}>{t.name}</Text>
               <Text style={s.cardDesc}>{t.desc}</Text>
               <Text style={[s.cardMeta,{color:cat.colour}]}>
-                {n} {n===1?'provider':'providers'}
-                {t.pricing === 'fixed' ? ' · fixed price' : ` · from €${from}/hr`}
+                {n} {n===1?'provider':'providers'} available
               </Text>
             </View>
             <Text style={s.cardGo}>›</Text>

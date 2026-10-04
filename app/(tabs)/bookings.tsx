@@ -7,11 +7,13 @@ import { supabase } from '../../lib/supabase';
 import { fmtDuration } from '../../lib/services';
 import PartsPanel from '../../components/PartsPanel';
 import Chat from '../../components/Chat';
+import QuotePanel from '../../components/QuotePanel';
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Waiting for cleaner',color:C.amber, bg:C.amberLt,   icon:'⏳'},
   pending_pool:          {label:'Finding a provider',color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
   reschedule_proposed:   {label:'New time offered', color:C.teal,   bg:C.tealLt,    icon:'📅'},
+  quoted:                {label:'Quote received',   color:C.teal,   bg:C.tealLt,    icon:'💬'},
   accepted:              {label:'Accepted',          color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'On the way',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
   arrived:               {label:'Cleaner arrived',   color:C.amber,  bg:C.amberLt,   icon:'🔐'},
@@ -44,7 +46,7 @@ const DISPUTE_REASONS = [
 ];
 
 export default function Bookings() {
-  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, loadBookings } = useApp();
+  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, respondToQuote, loadBookings } = useApp();
   const [refreshing, setRefreshing]   = useState(false);
   const [busy, setBusy]               = useState<string|null>(null);
   const [disputeFor, setDisputeFor]   = useState<string|null>(null);
@@ -74,6 +76,10 @@ export default function Bookings() {
   const onRefresh = async () => { setRefreshing(true); await loadBookings(); setRefreshing(false); };
   const confirmWork = async (id: string) => { setBusy(id); await clientConfirm(id); setBusy(null); };
   const doRelease = async (id: string) => { setBusy(id); await releaseToPool(id); setBusy(null); };
+
+  const doQuoteReply = async (id: string, accept: boolean) => {
+    setBusy(id); await respondToQuote(id, accept); setBusy(null);
+  };
 
   const doProposal = async (id: string, accept: boolean) => {
     setBusy(id); await respondToProposal(id, accept); setBusy(null);
@@ -199,6 +205,16 @@ export default function Bookings() {
                 );
               })()}
 
+              {(b.status==='quoted' ||
+                (b.pricingModel === 'quote' && ['pending','pending_pool','accepted'].includes(b.status))) && (
+                <QuotePanel
+                  booking={b}
+                  role="client"
+                  busy={isBusy}
+                  onRespond={(ok)=>doQuoteReply(b.id, ok)}
+                />
+              )}
+
               {b.status==='reschedule_proposed' && (
                 <View style={st.proposalBox}>
                   <Text style={st.proposalTitle}>
@@ -285,8 +301,9 @@ export default function Bookings() {
                 );
               })()}
 
-              {['accepted','en_route','arrived','in_progress','awaiting_confirmation']
-                .includes(b.status) && cleaner && (
+              {(['accepted','en_route','arrived','in_progress','awaiting_confirmation','quoted']
+                .includes(b.status)
+                || (b.pricingModel === 'quote' && b.status === 'pending')) && cleaner && (
                 <Chat
                   booking={b}
                   role="client"
@@ -363,21 +380,41 @@ export default function Bookings() {
                     const done = items.filter(t=>t.done).length;
                     const grouped: Record<string, any[]> = {};
                     items.forEach(t => { (grouped[t.area] ||= []).push(t); });
+                    const areas = Object.entries(grouped);
+                    const allDone = done === items.length;
                     return (
-                      <>
-                        <TouchableOpacity style={st.listToggle}
-                          onPress={()=>setOpenList(openList===b.id?null:b.id)}>
-                          <Text style={st.listToggleTxt}>
-                            📋  {done}/{items.length} tasks completed
+                      <View style={st.workCard}>
+                        <Text style={st.workTitle}>
+                          {allDone ? '✓  Everything on the list was done'
+                            : `${done} of ${items.length} tasks done`}
+                        </Text>
+
+                        <View style={st.areaWrap}>
+                          {areas.map(([area, tasks])=>{
+                            const areaDone = tasks.every((t:any)=>t.done);
+                            const n = tasks.filter((t:any)=>t.done).length;
+                            return (
+                              <View key={area} style={[st.areaChip, !areaDone&&st.areaChipPart]}>
+                                <Text style={[st.areaChipTxt, !areaDone&&{color:C.amber}]}>
+                                  {areaDone ? '✓' : `${n}/${tasks.length}`}  {area}
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+
+                        <TouchableOpacity onPress={()=>setOpenList(openList===b.id?null:b.id)}>
+                          <Text style={st.workMore}>
+                            {openList===b.id ? 'Hide the detail ▲' : 'See every task ▼'}
                           </Text>
-                          <Text style={st.listChevron}>{openList===b.id?'▲':'▼'}</Text>
                         </TouchableOpacity>
+
                         {openList===b.id && (
                           <View style={st.listBox}>
-                            {Object.entries(grouped).map(([area, tasks])=>(
+                            {areas.map(([area, tasks])=>(
                               <View key={area} style={st.listGroup}>
                                 <Text style={st.listArea}>{area}</Text>
-                                {tasks.map(t=>(
+                                {tasks.map((t:any)=>(
                                   <View key={t.id} style={st.listRow}>
                                     <Text style={[st.listMark,{color: t.done?C.green:C.red}]}>
                                       {t.done?'✓':'✕'}
@@ -389,7 +426,7 @@ export default function Bookings() {
                             ))}
                           </View>
                         )}
-                      </>
+                      </View>
                     );
                   })()}
                   {disputeFor===b.id ? (
@@ -529,6 +566,15 @@ const st = StyleSheet.create({
   confirmTitle:{fontSize:14,fontWeight:'800',color:C.teal},
   confirmTxt:{fontSize:12,color:C.text,lineHeight:18},
   deadline:{fontSize:12,color:C.teal,fontWeight:'700'},
+  workCard:{backgroundColor:C.white,borderRadius:12,padding:13,gap:9,marginTop:8,
+    borderWidth:1,borderColor:C.border},
+  workTitle:{fontSize:13,fontWeight:'800',color:C.dark},
+  areaWrap:{flexDirection:'row',flexWrap:'wrap',gap:6},
+  areaChip:{backgroundColor:C.greenLt,paddingHorizontal:10,paddingVertical:5,borderRadius:14,
+    borderWidth:1,borderColor:'#A7F3D0'},
+  areaChipPart:{backgroundColor:C.amberLt,borderColor:'#FDE68A'},
+  areaChipTxt:{fontSize:11,fontWeight:'700',color:C.green},
+  workMore:{fontSize:12,color:C.primary,fontWeight:'700'},
   listToggle:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',backgroundColor:C.white,borderRadius:10,padding:12,marginTop:8,borderWidth:1,borderColor:C.border},
   listToggleTxt:{fontSize:13,fontWeight:'700',color:C.teal},
   listChevron:{fontSize:12,color:C.muted},

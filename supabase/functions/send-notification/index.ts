@@ -60,6 +60,23 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `If you don't respond within 6 hours it's approved automatically.\n\n`
         + `${d.appUrl}`;
 
+    case 'quote_sent':
+      return `💬 *${d.cleanerName} has quoted you*\n\n`
+        + `*€${d.amount}* all in.\n\n`
+        + (d.note ? `"${d.note}"\n\n` : '')
+        + `Nothing is charged until the work is done and you approve it. `
+        + `Open Poji to accept or decline: ${d.appUrl}`;
+
+    case 'quote_accepted':
+      return `✅ *Quote accepted*\n\n`
+        + `€${d.amount} · ${d.date} at ${d.time}\n`
+        + `📍 ${d.address}\n\n`
+        + `You're good to go.`;
+
+    case 'quote_declined':
+      return `😕 *The client declined your quote*\n\n`
+        + `${d.address} — the job is cancelled. Nobody travelled, nobody is charged.`;
+
     case 'time_proposed':
       return `📅 *${d.cleanerName} suggests another time*\n\n`
         + `You asked for ${d.oldDate} at ${d.oldTime}.\n`

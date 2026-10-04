@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Switch
+  TextInput, ActivityIndicator, Switch, Platform
 } from 'react-native';
 import { router } from 'expo-router';
 import { useState, useEffect } from 'react';
@@ -10,8 +10,12 @@ import { CATEGORIES, tradesIn, findTrade } from '../../constants/trades';
 import { MALTA_MAIN, GOZO_LOCALITIES, validateIban, formatIban } from '../../constants/malta';
 import { MultiPicker } from '../../components/Picker';
 import Avatar from '../../components/Avatar';
+import AvailabilityGrid from '../../components/AvailabilityGrid';
+import {
+  DEFAULT_AVAILABILITY, describe, countSlots, type Availability,
+} from '../../lib/availability';
 
-type Section = 'trades' | 'rates' | 'areas' | 'about' | 'payment' | null;
+type Section = 'trades' | 'rates' | 'areas' | 'hours' | 'about' | 'payment' | null;
 
 export default function ProviderProfile() {
   const [open, setOpen]     = useState<Section>(null);
@@ -45,7 +49,16 @@ export default function ProviderProfile() {
     iban:'', bank_name:'', account_holder:'',
     has_insurance:false, insurance_provider:'', insurance_expiry:'',
     profile_photo_url:'',
+    availability: DEFAULT_AVAILABILITY as Availability,
+    notice_hours:'12',
+    max_jobs_per_day:'3',
   });
+
+  const [timeOff, setTimeOff] = useState<any[]>([]);
+  const [addingOff, setAddOff] = useState(false);
+  const [offFrom, setOffFrom] = useState('');
+  const [offTo, setOffTo]     = useState('');
+  const [offWhy, setOffWhy]   = useState('');
 
   const set = (k:string, v:any) => { setF((p:any)=>({...p,[k]:v})); setError(''); };
 
@@ -70,6 +83,9 @@ export default function ProviderProfile() {
           categories: data.categories || [],
           service_areas: data.service_areas || [],
           available: data.available !== false,
+          availability: data.availability || DEFAULT_AVAILABILITY,
+          notice_hours: String(data.notice_hours ?? 12),
+          max_jobs_per_day: String(data.max_jobs_per_day ?? 3),
         }));
         if (data.profile_photo_url) {
           const { data: signed } = await supabase.storage
@@ -78,9 +94,37 @@ export default function ProviderProfile() {
           if (signed?.signedUrl) setPhotoUrl(signed.signedUrl);
         }
       }
+      const { data: off } = await supabase.from('time_off')
+        .select('*').eq('provider_id', user.id)
+        .gte('ends_on', new Date().toISOString().slice(0,10))
+        .order('starts_on');
+      setTimeOff(off || []);
+
       setLoad(false);
     })();
   }, []);
+
+  const addTimeOff = async () => {
+    if (!offFrom || !offTo) { setError('Pick both dates'); return; }
+    if (offTo < offFrom)    { setError('The end date is before the start'); return; }
+    setSaving(true);
+    const { data:{ user } } = await supabase.auth.getUser();
+    const { data, error: e } = await supabase.from('time_off').insert({
+      provider_id: user!.id, starts_on: offFrom, ends_on: offTo,
+      reason: offWhy.trim() || null,
+    }).select().single();
+    setSaving(false);
+    if (e) { setError(e.message); return; }
+    setTimeOff(prev => [...prev, data].sort((a,b)=>a.starts_on.localeCompare(b.starts_on)));
+    setAddOff(false); setOffFrom(''); setOffTo(''); setOffWhy('');
+  };
+
+  const removeTimeOff = async (id: string) => {
+    setSaving(true);
+    await supabase.from('time_off').delete().eq('id', id);
+    setTimeOff(prev => prev.filter(t => t.id !== id));
+    setSaving(false);
+  };
 
   const save = async (patch: Record<string, any>, closeAfter = true) => {
     setSaving(true); setError('');
@@ -130,6 +174,7 @@ export default function ProviderProfile() {
             f.status==='approved' ? {color:C.green} : f.status==='rejected' ? {color:C.red} : {color:C.amber}]}>
             {f.status==='approved' ? '✓ Verified'
               : f.status==='rejected' ? '⚠️ Needs changes'
+              : f.status==='basic'    ? '○ Not verified yet'
               : '⏳ Under review'}
           </Text>
         </View>
@@ -165,8 +210,21 @@ export default function ProviderProfile() {
         </View>
       )}
 
+      {(f.status === 'basic' || !f.status) && (
+        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/onboarding')}>
+          <Text style={s.verifyIcon}>🪪</Text>
+          <View style={{flex:1}}>
+            <Text style={s.verifyTitle}>Verify your account</Text>
+            <Text style={s.verifyTxt}>
+              Three minutes. Until then you can see jobs but not take them.
+            </Text>
+          </View>
+          <Text style={s.verifyGo}>›</Text>
+        </TouchableOpacity>
+      )}
+
       {/* ── availability ── */}
-      <View style={s.availCard}>
+      {f.status === 'approved' && <View style={s.availCard}>
         <View style={{flex:1}}>
           <Text style={s.availTitle}>
             {f.available ? 'Taking work' : 'Not taking work'}
@@ -183,7 +241,7 @@ export default function ProviderProfile() {
           trackColor={{ false:C.border, true:C.green }}
           thumbColor={C.white}
         />
-      </View>
+      </View>}
 
       {/* ══ TRADES ══ */}
       <Row
@@ -383,6 +441,139 @@ export default function ProviderProfile() {
         </View>
       )}
 
+      {/* ══ HOURS ══ */}
+      <Row
+        icon="🗓" title="When you work"
+        value={describe(f.availability)}
+        open={open==='hours'} onPress={()=>setOpen(open==='hours'?null:'hours')}
+      />
+      {open==='hours' && (
+        <View style={s.panel}>
+          <Text style={s.panelHint}>
+            You only hear about jobs in the slots you tick. Tap a day name or a
+            time label to toggle the whole row.
+          </Text>
+
+          <AvailabilityGrid
+            value={f.availability}
+            onChange={(v)=>set('availability', v)}
+          />
+
+          <Text style={s.lbl}>How much notice do you need?</Text>
+          <View style={s.pillWrap}>
+            {[2,6,12,24,48].map(h=>(
+              <TouchableOpacity key={h} style={[s.pill, Number(f.notice_hours)===h&&s.pillOn]}
+                onPress={()=>set('notice_hours', String(h))}>
+                <Text style={[s.pillTxt, Number(f.notice_hours)===h&&s.pillTxtOn]}>
+                  {h < 24 ? `${h}h` : `${h/24} day${h>24?'s':''}`}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={s.hintSmall}>
+            Jobs starting sooner than this won't be offered to you.
+          </Text>
+
+          <Text style={s.lbl}>Most jobs in one day</Text>
+          <View style={s.pillWrap}>
+            {[1,2,3,4,5,8].map(n=>(
+              <TouchableOpacity key={n} style={[s.pill, Number(f.max_jobs_per_day)===n&&s.pillOn]}
+                onPress={()=>set('max_jobs_per_day', String(n))}>
+                <Text style={[s.pillTxt, Number(f.max_jobs_per_day)===n&&s.pillTxtOn]}>{n}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <SaveBtn busy={saving} disabled={countSlots(f.availability)===0}
+            onPress={()=>save({
+              availability: f.availability,
+              notice_hours: Number(f.notice_hours) || 12,
+              max_jobs_per_day: Number(f.max_jobs_per_day) || 3,
+            })} />
+
+          {/* ── time off ── */}
+          <Text style={s.lbl}>Time off</Text>
+          {timeOff.length === 0 && !addingOff && (
+            <Text style={s.hintSmall}>
+              Going away? Block the dates and nothing will reach you.
+            </Text>
+          )}
+
+          {timeOff.map(t=>(
+            <View key={t.id} style={s.offRow}>
+              <Text style={s.offIcon}>🌴</Text>
+              <View style={{flex:1}}>
+                <Text style={s.offDates}>
+                  {new Date(t.starts_on+'T00:00:00').toLocaleDateString('en-GB',
+                    {day:'numeric',month:'short'})}
+                  {' – '}
+                  {new Date(t.ends_on+'T00:00:00').toLocaleDateString('en-GB',
+                    {day:'numeric',month:'short'})}
+                </Text>
+                {!!t.reason && <Text style={s.offWhy}>{t.reason}</Text>}
+              </View>
+              <TouchableOpacity onPress={()=>removeTimeOff(t.id)} disabled={saving}>
+                <Text style={s.offRemove}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+
+          {addingOff ? (
+            <View style={s.offForm}>
+              <View style={s.row2}>
+                <View style={{flex:1}}>
+                  <Text style={s.lblSmall}>From</Text>
+                  {Platform.OS === 'web' ? (
+                    // @ts-ignore
+                    <input type="date" value={offFrom}
+                      min={new Date().toISOString().slice(0,10)}
+                      onChange={(e:any)=>setOffFrom(e.target.value)}
+                      style={{backgroundColor:'#fff',borderRadius:10,padding:11,fontSize:14,
+                        color:'#374151',border:`1.5px solid ${C.border}`,width:'100%',
+                        fontFamily:'inherit',boxSizing:'border-box'}} />
+                  ) : (
+                    <TextInput style={s.input} value={offFrom} onChangeText={setOffFrom}
+                      placeholder="YYYY-MM-DD" placeholderTextColor={C.muted} />
+                  )}
+                </View>
+                <View style={{flex:1}}>
+                  <Text style={s.lblSmall}>To</Text>
+                  {Platform.OS === 'web' ? (
+                    // @ts-ignore
+                    <input type="date" value={offTo}
+                      min={offFrom || new Date().toISOString().slice(0,10)}
+                      onChange={(e:any)=>setOffTo(e.target.value)}
+                      style={{backgroundColor:'#fff',borderRadius:10,padding:11,fontSize:14,
+                        color:'#374151',border:`1.5px solid ${C.border}`,width:'100%',
+                        fontFamily:'inherit',boxSizing:'border-box'}} />
+                  ) : (
+                    <TextInput style={s.input} value={offTo} onChangeText={setOffTo}
+                      placeholder="YYYY-MM-DD" placeholderTextColor={C.muted} />
+                  )}
+                </View>
+              </View>
+              <TextInput style={[s.input,{marginTop:10}]} value={offWhy}
+                onChangeText={setOffWhy}
+                placeholder="Holiday, family, whatever" placeholderTextColor={C.muted} />
+              <View style={s.row2}>
+                <TouchableOpacity style={s.offCancel}
+                  onPress={()=>{setAddOff(false);setError('');}}>
+                  <Text style={s.offCancelTxt}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.offSave, saving&&s.saveDis]}
+                  disabled={saving} onPress={addTimeOff}>
+                  <Text style={s.offSaveTxt}>Block these dates</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity style={s.offAdd} onPress={()=>setAddOff(true)}>
+              <Text style={s.offAddTxt}>＋  Add time off</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {/* ══ ABOUT ══ */}
       <Row
         icon="📝" title="About you"
@@ -403,48 +594,23 @@ export default function ProviderProfile() {
         </View>
       )}
 
-      {/* ══ PAYMENT ══ */}
       <Row
         icon="🏦" title="Getting paid"
-        value={f.iban ? formatIban(f.iban).slice(0,13) + '…' : 'Not set'}
-        open={open==='payment'} onPress={()=>setOpen(open==='payment'?null:'payment')}
+        value={f.iban ? formatIban(f.iban).slice(0,13) + '…' : 'Not set yet'}
+        open={false} onPress={()=>router.push('/payout')}
       />
-      {open==='payment' && (
-        <View style={s.panel}>
-          <Text style={s.lbl}>Account holder</Text>
-          <TextInput style={s.input} value={f.account_holder}
-            onChangeText={(t:string)=>set('account_holder',t)}
-            placeholder="As your bank has it" placeholderTextColor={C.muted} />
-
-          <Text style={s.lbl}>IBAN</Text>
-          <TextInput style={s.input} value={f.iban}
-            onChangeText={(t:string)=>set('iban', t.toUpperCase())}
-            onBlur={()=>set('iban', formatIban(f.iban))}
-            placeholder="MT84 MALT …" placeholderTextColor={C.muted} autoCapitalize="characters" />
-          {f.iban.length > 4 && (() => {
-            const r = validateIban(f.iban);
-            return <Text style={[s.note,{color: r.ok ? C.green : C.red}]}>
-              {r.ok ? '✓ Checks out' : r.reason}
-            </Text>;
-          })()}
-
-          <Text style={s.lbl}>Bank</Text>
-          <TextInput style={s.input} value={f.bank_name}
-            onChangeText={(t:string)=>set('bank_name',t)}
-            placeholder="BOV, HSBC, Revolut…" placeholderTextColor={C.muted} />
-
-          <SaveBtn busy={saving}
-            disabled={!validateIban(f.iban).ok}
-            onPress={()=>save({
-              iban: f.iban.replace(/\s+/g,'').toUpperCase(),
-              bank_name: f.bank_name.trim(),
-              account_holder: f.account_holder.trim(),
-            })} />
-        </View>
-      )}
 
       {/* ══ static links ══ */}
       <Text style={s.sectionTitle}>Account</Text>
+
+      <TouchableOpacity style={s.linkRow} onPress={()=>router.push('/my-services')}>
+        <Text style={s.linkIcon}>🧰</Text>
+        <View style={{flex:1}}>
+          <Text style={s.linkTitle}>My services and prices</Text>
+          <Text style={s.linkSub}>What you offer and what you charge for each</Text>
+        </View>
+        <Text style={s.chev}>›</Text>
+      </TouchableOpacity>
 
       <TouchableOpacity style={s.linkRow} onPress={()=>router.push('/onboarding')}>
         <Text style={s.linkIcon}>📄</Text>
@@ -522,6 +688,12 @@ const s = StyleSheet.create({
     borderWidth:1,borderColor:'#FECACA'},
   errTxt:{fontSize:13,color:C.red,fontWeight:'600'},
 
+  verifyCard:{flexDirection:'row',alignItems:'center',gap:12,marginHorizontal:20,marginTop:18,
+    backgroundColor:C.primaryLt,borderRadius:16,padding:16,borderWidth:1.5,borderColor:C.primary},
+  verifyIcon:{fontSize:24},
+  verifyTitle:{fontSize:15,fontWeight:'800',color:C.primary},
+  verifyTxt:{fontSize:12,color:C.text,marginTop:3,lineHeight:17},
+  verifyGo:{fontSize:22,color:C.primary},
   standingCard:{marginHorizontal:20,marginTop:18,backgroundColor:C.redLt,borderRadius:16,
     padding:16,gap:6,borderWidth:1,borderColor:'#FECACA'},
   standingTitle:{fontSize:15,fontWeight:'800',color:C.red},
@@ -581,6 +753,27 @@ const s = StyleSheet.create({
   calcLbl:{fontSize:12,color:C.muted},
   calcVal:{fontSize:13,fontWeight:'700',color:C.dark},
 
+  hintSmall:{fontSize:11,color:C.muted,lineHeight:16,marginTop:6},
+  lblSmall:{fontSize:10,fontWeight:'700',color:C.muted,textTransform:'uppercase',
+    letterSpacing:0.4,marginBottom:6},
+  row2:{flexDirection:'row',gap:10,marginTop:10},
+  offRow:{flexDirection:'row',alignItems:'center',gap:10,backgroundColor:C.bg,
+    borderRadius:11,padding:11,marginTop:8,borderWidth:1,borderColor:C.border},
+  offIcon:{fontSize:18},
+  offDates:{fontSize:13,fontWeight:'700',color:C.dark},
+  offWhy:{fontSize:11,color:C.muted,marginTop:2},
+  offRemove:{fontSize:11,color:C.red,fontWeight:'700'},
+  offForm:{backgroundColor:C.bg,borderRadius:12,padding:12,marginTop:10,
+    borderWidth:1,borderColor:C.border},
+  offCancel:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:11,
+    paddingVertical:11,alignItems:'center',backgroundColor:C.white},
+  offCancelTxt:{fontSize:13,fontWeight:'600',color:C.muted},
+  offSave:{flex:1.4,backgroundColor:C.primary,borderRadius:11,paddingVertical:11,
+    alignItems:'center'},
+  offSaveTxt:{fontSize:13,fontWeight:'700',color:C.white},
+  offAdd:{borderRadius:11,paddingVertical:12,alignItems:'center',marginTop:10,
+    borderWidth:1.5,borderStyle:'dashed',borderColor:C.border,backgroundColor:C.bg},
+  offAddTxt:{fontSize:13,fontWeight:'700',color:C.primary},
   saveBtn:{backgroundColor:C.primary,borderRadius:12,paddingVertical:14,alignItems:'center',marginTop:20},
   saveDis:{opacity:0.5},
   saveTxt:{color:C.white,fontSize:14,fontWeight:'700'},

@@ -15,7 +15,7 @@ export default function ServicesTab() {
        || t.desc.toLowerCase().includes(q.toLowerCase()));
 
   const open = (t: any) =>
-    t.roadside ? router.push(`/roadside?trade=${t.id}`) : router.push(`/providers?trade=${t.id}`);
+    t.roadside ? router.push(`/roadside?trade=${t.id}`) : router.push(`/booking?trade=${t.id}`);
 
   const grouped = CATEGORIES
     .map(cat => ({ cat, items: list.filter(t => t.category === cat.id) }))
@@ -62,8 +62,7 @@ export default function ServicesTab() {
                   <Text style={s.cardName}>{t.name}</Text>
                   <Text style={s.cardDesc}>{t.desc}</Text>
                   <Text style={[s.cardMeta,{color:cat.colour}]}>
-                    {people.length} {people.length===1?'provider':'providers'}
-                    {t.pricing === 'fixed' ? ' · fixed price' : ` · from €${from}/hr`}
+                    {people.length} {people.length===1?'provider':'providers'} available
                   </Text>
                 </View>
                 <Text style={s.cardGo}>›</Text>

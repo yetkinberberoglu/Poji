@@ -7,6 +7,7 @@ import { findTrade } from '../../constants/trades';
 import PartsPanel from '../../components/PartsPanel';
 import ProposeTime from '../../components/ProposeTime';
 import Chat from '../../components/Chat';
+import QuotePanel from '../../components/QuotePanel';
 import { useState, useEffect } from 'react';
 import { fmtDuration } from '../../lib/services';
 import { directionsLink, mapsLink } from '../../lib/location';
@@ -27,6 +28,7 @@ const prettyDate = (d?: string) => {
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Offered to You',  color:C.amber,  bg:C.amberLt,   icon:'🔔'},
   reschedule_proposed:   {label:'Time suggested',   color:C.teal,   bg:C.tealLt,    icon:'📅'},
+  quoted:                {label:'Quote sent',       color:C.teal,   bg:C.tealLt,    icon:'💬'},
   pending_pool:          {label:'Open to All',     color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
   accepted:              {label:'Accepted',        color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'En Route',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
@@ -39,12 +41,18 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
 };
 
 export default function ProviderScreen() {
-  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, loadBookings, userName, userId, myCategories } = useApp();
+  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, loadBookings, userName, userId, myCategories, sendQuote } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy]             = useState<string|null>(null);
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
   const [pinError, setPinError]     = useState<Record<string,string>>({});
   const [proposingFor, setProposing]= useState<string|null>(null);
+  const doQuote = async (id:string, labour:number, parts:number, note:string) => {
+    setBusy(id);
+    await sendQuote(id, labour, parts, note, userId);
+    setBusy(null);
+  };
+
   const [clientNames, setClientNames]   = useState<Record<string,string>>({});
   const [clientPhones, setClientPhones] = useState<Record<string,string>>({});
 
@@ -84,7 +92,7 @@ export default function ProviderScreen() {
       const { data:{ user } } = await supabase.auth.getUser();
       if (!user) return;
       const { data } = await supabase.from('cleaner_profiles')
-        .select('verification_status, submitted_at, rejection_reason, first_name, categories')
+        .select('verification_status, signup_stage, submitted_at, rejection_reason, first_name, categories')
         .eq('id', user.id).maybeSingle();
       if (data) { setMyStatus(data.verification_status); setMyApp(data); }
     })();
@@ -115,6 +123,37 @@ export default function ProviderScreen() {
     await supabase.from('booking_checklist')
       .update({ done, checked_at: done ? new Date().toISOString() : null })
       .eq('id', taskId);
+  };
+
+  const toggleArea = async (bookingId: string, area: string, done: boolean) => {
+    const items = (checklist[bookingId] || []).filter(t => t.area === area);
+    if (!items.length) return;
+
+    // optimistic — ticking five areas shouldn't feel like five round trips
+    setChecklist(prev => ({
+      ...prev,
+      [bookingId]: (prev[bookingId] || []).map(t =>
+        t.area === area ? { ...t, done } : t),
+    }));
+
+    const { error } = await supabase.from('booking_checklist')
+      .update({ done, done_at: done ? new Date().toISOString() : null })
+      .in('id', items.map(t => t.id));
+
+    if (error) { console.log('toggleArea:', error.message); loadChecklist(bookingId); }
+  };
+
+  const markEverything = async (bookingId: string) => {
+    const items = checklist[bookingId] || [];
+    if (!items.length) return;
+    setChecklist(prev => ({
+      ...prev,
+      [bookingId]: (prev[bookingId] || []).map(t => ({ ...t, done: true })),
+    }));
+    const { error } = await supabase.from('booking_checklist')
+      .update({ done: true, done_at: new Date().toISOString() })
+      .eq('booking_id', bookingId);
+    if (error) { console.log('markEverything:', error.message); loadChecklist(bookingId); }
   };
 
   const listProgress = (bookingId: string) => {
@@ -228,50 +267,99 @@ export default function ProviderScreen() {
         ))}
       </View>}
 
-      {myStatus && myStatus !== 'approved' && (
-        <View style={s0.pendingCard}>
-          <Text style={s0.pendingIcon}>⏳</Text>
-          <Text style={s0.pendingTitle}>Your account is being checked</Text>
-          <Text style={s0.pendingTxt}>
-            We're verifying your documents. This usually takes 1–2 working days.
-            Until then you won't appear to clients and can't take jobs.
-          </Text>
+      {myStatus !== 'approved' && (() => {
+        const stage = myApp?.signup_stage || 'basic';
+        const open  = active.length;
 
-          <View style={s0.pendingSteps}>
-            {[
-              ['✓', 'Application submitted',
-               myApp?.submitted_at
-                 ? new Date(myApp.submitted_at).toLocaleDateString('en-GB',
-                     {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})
-                 : 'Done', true],
-              ['2', 'We check your ID and documents', 'In progress', false],
-              ['3', 'Your profile goes live', 'Clients can book you', false],
-            ].map(([n,t,d,done]:any)=>(
-              <View key={t} style={s0.pStepRow}>
-                <View style={[s0.pStepDot, done&&s0.pStepDotOn]}>
-                  <Text style={[s0.pStepNum, done&&s0.pStepNumOn]}>{n}</Text>
-                </View>
-                <View style={{flex:1}}>
-                  <Text style={[s0.pStepTitle, done&&{color:C.green}]}>{t}</Text>
-                  <Text style={s0.pStepDesc}>{d}</Text>
-                </View>
+        // Not verified yet — show them the work, then the next step
+        if (myStatus === 'basic' || stage === 'basic') {
+          return (
+            <View style={s0.gateCard}>
+              <Text style={s0.gateIcon}>👀</Text>
+              <Text style={s0.gateTitle}>
+                {open > 0
+                  ? `${open} job${open===1?'':'s'} open in your areas`
+                  : 'No open jobs right now'}
+              </Text>
+              <Text style={s0.gateTxt}>
+                {open > 0
+                  ? "Have a look below. To accept one, we need to verify who you are — it takes about three minutes."
+                  : "Nothing waiting at this moment. Verify your account now and you'll be ready the second something comes in."}
+              </Text>
+
+              <View style={s0.gateSteps}>
+                {[
+                  ['✓','Trades and areas set','Done', true],
+                  ['2','Verify your identity','ID photo, a selfie and a profile picture', false],
+                  ['3','Add your bank details','Only when you are owed money', false],
+                ].map(([n,t,d,done]:any)=>(
+                  <View key={t} style={s0.gStepRow}>
+                    <View style={[s0.gStepDot, done&&s0.gStepDotOn]}>
+                      <Text style={[s0.gStepNum, done&&s0.gStepNumOn]}>{n}</Text>
+                    </View>
+                    <View style={{flex:1}}>
+                      <Text style={[s0.gStepTitle, done&&{color:C.green}]}>{t}</Text>
+                      <Text style={s0.gStepDesc}>{d}</Text>
+                    </View>
+                  </View>
+                ))}
               </View>
-            ))}
+
+              <TouchableOpacity style={s0.gateBtn} onPress={()=>router.push('/onboarding')}>
+                <Text style={s0.gateBtnTxt}>Verify my account  →</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+
+        // Documents in, waiting on us
+        return (
+          <View style={s0.pendingCard}>
+            <Text style={s0.pendingIcon}>⏳</Text>
+            <Text style={s0.pendingTitle}>We're checking your documents</Text>
+            <Text style={s0.pendingTxt}>
+              Usually done within a working day. You can browse jobs meanwhile —
+              you'll be able to accept them the moment you're approved.
+            </Text>
+
+            <View style={s0.pendingSteps}>
+              {[
+                ['✓', 'Application submitted',
+                 myApp?.submitted_at
+                   ? new Date(myApp.submitted_at).toLocaleDateString('en-GB',
+                       {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})
+                   : 'Done', true],
+                ['2', 'We check your ID and documents', 'In progress', false],
+                ['3', 'Your profile goes live', 'Clients can book you', false],
+              ].map(([n,t,d,done]:any)=>(
+                <View key={t} style={s0.pStepRow}>
+                  <View style={[s0.pStepDot, done&&s0.pStepDotOn]}>
+                    <Text style={[s0.pStepNum, done&&s0.pStepNumOn]}>{n}</Text>
+                  </View>
+                  <View style={{flex:1}}>
+                    <Text style={[s0.pStepTitle, done&&{color:C.green}]}>{t}</Text>
+                    <Text style={s0.pStepDesc}>{d}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            <TouchableOpacity style={s0.pendingBtn} onPress={()=>router.push('/onboarding')}>
+              <Text style={s0.pendingBtnTxt}>Review my application</Text>
+            </TouchableOpacity>
           </View>
+        );
+      })()}
 
-          <TouchableOpacity style={s0.pendingBtn} onPress={()=>router.push('/onboarding')}>
-            <Text style={s0.pendingBtnTxt}>Review my application</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {myStatus === 'approved' && (
+      {active.length > 0 && (
         <Text style={s0.sectionTitle}>
-          {active.length>0 ? `Active Jobs (${active.length})` : 'No active jobs · Pull to refresh'}
+          {myStatus === 'approved'
+            ? `Active Jobs (${active.length})`
+            : `Open near you (${active.length})`}
         </Text>
       )}
 
-      {myStatus === 'approved' && active.map(b => {
+      {active.map(b => {
         const st  = STATUS[b.status] || STATUS.pending;
         const pay = (b.total/1.029/1.18*0.80).toFixed(2);
         const isBusy = busy === b.id;
@@ -384,7 +472,26 @@ export default function ProviderScreen() {
                       <Text style={s0.poolTxt}>🌐  Open to all cleaners — first to accept gets it</Text>
                     </View>
                   )}
-                  {proposingFor === b.id ? (
+                  {b.pricingModel === 'quote' ? (
+                    myStatus !== 'approved' ? (
+                      <TouchableOpacity style={s0.lockedBtn}
+                        onPress={()=>router.push('/onboarding')}>
+                        <Text style={s0.lockedTxt}>🔒  Verify your account to quote</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <QuotePanel
+                        booking={b}
+                        role="provider"
+                        busy={isBusy}
+                        onSend={(l,pt,n)=>doQuote(b.id, l, pt, n)}
+                      />
+                    )
+                  ) : myStatus !== 'approved' ? (
+                    <TouchableOpacity style={s0.lockedBtn}
+                      onPress={()=>router.push('/onboarding')}>
+                      <Text style={s0.lockedTxt}>🔒  Verify your account to take this job</Text>
+                    </TouchableOpacity>
+                  ) : proposingFor === b.id ? (
                     <ProposeTime
                       currentDate={b.date}
                       currentTime={b.time}
@@ -410,6 +517,10 @@ export default function ProviderScreen() {
                     </>
                   )}
                 </>
+              )}
+
+              {b.status==='quoted' && (
+                <QuotePanel booking={b} role="provider" busy={isBusy} />
               )}
 
               {b.status==='reschedule_proposed' && (
@@ -546,44 +657,77 @@ export default function ProviderScreen() {
                       );
                     })()}
 
-                    <TouchableOpacity style={s0.progressBar} onPress={()=>setOpenList(openList===b.id?null:b.id)}>
-                      <View style={{flex:1}}>
-                        <Text style={s0.progressTitle}>
-                          📋  Task checklist — {prog.done}/{prog.total} done
+                    <View style={s0.checkCard}>
+                      <View style={s0.checkHead}>
+                        <Text style={s0.checkTitle}>
+                          📋  What you're doing
                         </Text>
-                        <View style={s0.barTrack}>
-                          <View style={[s0.barFill,{width: prog.total ? `${(prog.done/prog.total)*100}%` : '0%'}]} />
-                        </View>
+                        {!allDone && prog.total > 0 && (
+                          <TouchableOpacity onPress={()=>markEverything(b.id)}>
+                            <Text style={s0.markAll}>Mark all done</Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
-                      <Text style={s0.progressChevron}>{openList===b.id?'▲':'▼'}</Text>
-                    </TouchableOpacity>
 
-                    {openList===b.id && (
-                      <View style={s0.listBox}>
-                        {Object.entries(grouped).map(([area, tasks])=>(
-                          <View key={area} style={s0.listGroup}>
-                            <Text style={s0.listArea}>{area}</Text>
-                            {tasks.map(t=>(
-                              <TouchableOpacity key={t.id} style={s0.listRow}
-                                onPress={()=>toggleTask(b.id, t.id, !t.done)}>
-                                <View style={[s0.listCheck, t.done&&s0.listCheckOn]}>
-                                  {t.done && <Text style={s0.listCheckTxt}>✓</Text>}
+                      <View style={s0.barTrack}>
+                        <View style={[s0.barFill,
+                          {width: prog.total ? `${(prog.done/prog.total)*100}%` : '0%'}]} />
+                      </View>
+
+                      {Object.entries(grouped).map(([area, tasks])=>{
+                        const areaDone  = tasks.every((t:any)=>t.done);
+                        const someDone  = tasks.some((t:any)=>t.done);
+                        const expanded  = openList === `${b.id}:${area}`;
+                        return (
+                          <View key={area} style={[s0.areaBlock, areaDone&&s0.areaBlockOn]}>
+                            <View style={s0.areaRow}>
+                              <TouchableOpacity
+                                style={s0.areaTapZone}
+                                onPress={()=>toggleArea(b.id, area, !areaDone)}>
+                                <View style={[s0.areaCheck, areaDone&&s0.areaCheckOn,
+                                  !areaDone&&someDone&&s0.areaCheckPart]}>
+                                  {areaDone
+                                    ? <Text style={s0.areaCheckTxt}>✓</Text>
+                                    : someDone ? <View style={s0.partDot}/> : null}
                                 </View>
-                                <Text style={[s0.listTask, t.done&&s0.listTaskDone]}>{t.task}</Text>
+                                <View style={{flex:1}}>
+                                  <Text style={[s0.areaName, areaDone&&s0.areaNameOn]}>{area}</Text>
+                                  <Text style={s0.areaCount}>
+                                    {tasks.filter((t:any)=>t.done).length}/{tasks.length} tasks
+                                  </Text>
+                                </View>
                               </TouchableOpacity>
-                            ))}
-                          </View>
-                        ))}
-                      </View>
-                    )}
 
-                    {!allDone && prog.total > 0 && (
-                      <View style={s0.warnBox}>
-                        <Text style={s0.warnTxt}>
-                          Tick every task before finishing. {prog.total - prog.done} left.
+                              <TouchableOpacity style={s0.areaExpand}
+                                onPress={()=>setOpenList(expanded ? null : `${b.id}:${area}`)}>
+                                <Text style={s0.areaChevron}>{expanded ? '▲' : '▼'}</Text>
+                              </TouchableOpacity>
+                            </View>
+
+                            {expanded && (
+                              <View style={s0.taskList}>
+                                {tasks.map((t:any)=>(
+                                  <TouchableOpacity key={t.id} style={s0.listRow}
+                                    onPress={()=>toggleTask(b.id, t.id, !t.done)}>
+                                    <View style={[s0.listCheck, t.done&&s0.listCheckOn]}>
+                                      {t.done && <Text style={s0.listCheckTxt}>✓</Text>}
+                                    </View>
+                                    <Text style={[s0.listTask, t.done&&s0.listTaskDone]}>{t.task}</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+
+                      {!allDone && prog.total > 0 && (
+                        <Text style={s0.checkHint}>
+                          Tap an area once when you've finished it. Open it if you want
+                          to tick tasks one by one.
                         </Text>
-                      </View>
-                    )}
+                      )}
+                    </View>
 
                     <TouchableOpacity
                       style={[s0.primaryBtn,(isBusy||!allDone)&&s0.dis]}
@@ -643,7 +787,7 @@ export default function ProviderScreen() {
         );
       })}
 
-      {myStatus === 'approved' && done.length>0 && (
+      {done.length>0 && (
         <>
           <Text style={s0.sectionTitle}>History ({done.length})</Text>
           {done.map(b=>{
@@ -765,6 +909,25 @@ const s0 = StyleSheet.create({
   primaryBtn:{backgroundColor:C.primary,borderRadius:12,paddingVertical:14,alignItems:'center'},
   whiteBtnTxt:{color:C.white,fontWeight:'700',fontSize:15},
   dis:{opacity:0.5},
+  lockedBtn:{backgroundColor:C.bgAlt,borderRadius:12,paddingVertical:14,alignItems:'center',
+    borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
+  lockedTxt:{fontSize:13,fontWeight:'700',color:C.primary},
+  gateCard:{marginHorizontal:20,marginBottom:20,backgroundColor:C.white,borderRadius:20,
+    padding:20,gap:10,borderWidth:1,borderColor:C.border,...S.sm},
+  gateIcon:{fontSize:40,textAlign:'center'},
+  gateTitle:{fontSize:18,fontWeight:'800',color:C.dark,textAlign:'center'},
+  gateTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
+  gateSteps:{gap:12,marginTop:10,marginBottom:4},
+  gStepRow:{flexDirection:'row',gap:12,alignItems:'flex-start'},
+  gStepDot:{width:26,height:26,borderRadius:13,backgroundColor:C.bgAlt,borderWidth:2,
+    borderColor:C.border,alignItems:'center',justifyContent:'center'},
+  gStepDotOn:{backgroundColor:C.green,borderColor:C.green},
+  gStepNum:{fontSize:11,fontWeight:'800',color:C.muted},
+  gStepNumOn:{color:C.white},
+  gStepTitle:{fontSize:13,fontWeight:'700',color:C.text},
+  gStepDesc:{fontSize:11,color:C.muted,marginTop:2},
+  gateBtn:{backgroundColor:C.primary,borderRadius:14,paddingVertical:15,alignItems:'center',marginTop:4},
+  gateBtnTxt:{fontSize:15,fontWeight:'700',color:C.white},
   proposeBtn:{borderWidth:1.5,borderColor:C.teal,borderRadius:12,paddingVertical:12,
     alignItems:'center',backgroundColor:C.white},
   proposeTxt:{fontSize:13,fontWeight:'700',color:C.teal},
@@ -772,6 +935,30 @@ const s0 = StyleSheet.create({
     borderWidth:1,borderColor:'#BAE6FD'},
   waitProposalTitle:{fontSize:14,fontWeight:'800',color:C.teal},
   waitProposalTxt:{fontSize:12,color:C.text,lineHeight:18},
+  checkCard:{backgroundColor:C.white,borderRadius:14,padding:14,gap:10,
+    borderWidth:1,borderColor:C.border},
+  checkHead:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},
+  checkTitle:{fontSize:14,fontWeight:'800',color:C.dark},
+  markAll:{fontSize:12,fontWeight:'700',color:C.primary},
+  checkHint:{fontSize:11,color:C.muted,lineHeight:16},
+  areaBlock:{borderRadius:12,borderWidth:1.5,borderColor:C.border,backgroundColor:C.bg,
+    overflow:'hidden'},
+  areaBlockOn:{borderColor:C.green,backgroundColor:C.greenLt},
+  areaRow:{flexDirection:'row',alignItems:'center'},
+  areaTapZone:{flex:1,flexDirection:'row',alignItems:'center',gap:12,padding:13},
+  areaCheck:{width:26,height:26,borderRadius:8,borderWidth:2,borderColor:C.border,
+    alignItems:'center',justifyContent:'center',backgroundColor:C.white},
+  areaCheckOn:{backgroundColor:C.green,borderColor:C.green},
+  areaCheckPart:{borderColor:C.amber},
+  areaCheckTxt:{color:C.white,fontSize:15,fontWeight:'800'},
+  partDot:{width:10,height:10,borderRadius:5,backgroundColor:C.amber},
+  areaName:{fontSize:14,fontWeight:'700',color:C.dark},
+  areaNameOn:{color:C.green},
+  areaCount:{fontSize:11,color:C.muted,marginTop:2},
+  areaExpand:{paddingHorizontal:14,paddingVertical:16},
+  areaChevron:{fontSize:11,color:C.muted},
+  taskList:{paddingHorizontal:13,paddingBottom:12,gap:2,borderTopWidth:1,
+    borderTopColor:C.border,paddingTop:10},
   progressBar:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:C.primaryLt,borderRadius:12,padding:14,borderWidth:1,borderColor:C.border},
   progressTitle:{fontSize:13,fontWeight:'800',color:C.primary,marginBottom:8},
   barTrack:{height:6,backgroundColor:C.white,borderRadius:3,overflow:'hidden'},

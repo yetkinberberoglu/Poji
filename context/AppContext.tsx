@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/notify';
-import { seedChecklist, seedExtraTasks, finalQuote, loadParts, partsSummary } from '../lib/services';
+import { canTakeJob } from '../lib/availability';
+import { seedChecklist, seedExtraTasks, finalQuote, fixedQuote, loadParts, partsSummary } from '../lib/services';
 
 export const MOCK_CLEANERS: any[] = [];
 
@@ -46,6 +47,10 @@ export interface Booking {
   locationNote?: string | null;
   vehicleInfo?: string | null;
   tradeId?: string | null;
+  labourTotal?: number | null;
+  quoteAmount?: number | null;
+  quoteParts?: number | null;
+  quoteNote?: string | null;
 }
 
 export type Cleaner = {
@@ -59,6 +64,8 @@ export type Cleaner = {
   categories?: string[]; acceptsUrgent?: boolean; serviceRadiusKm?: number;
   photoPath?: string | null; photoUrl?: string | null;
   insured?: boolean; coversAllMalta?: boolean; coversAllGozo?: boolean;
+  availability?: any; noticeHours?: number;
+  timeOff?: { starts_on:string; ends_on:string }[];
 };
 
 interface Ctx {
@@ -75,7 +82,8 @@ interface Ctx {
              pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
-             releasedToPool?: boolean; tradeId?: string|null }
+             releasedToPool?: boolean; tradeId?: string|null;
+             labourTotal?: number|null; partsTotal?: number|null }
   ) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   markArrived: (id: string) => Promise<string>;
@@ -87,6 +95,8 @@ interface Ctx {
   reassignCleaner: (id: string, newCleanerId: string) => Promise<void>;
   acceptJob: (id: string, myCleanerId: string) => Promise<boolean>;
   proposeTime: (id: string, date: string, time: string, note: string, myId: string) => Promise<void>;
+  sendQuote: (id: string, labour: number, parts: number, note: string, myId: string) => Promise<void>;
+  respondToQuote: (id: string, accept: boolean) => Promise<void>;
   respondToProposal: (id: string, accept: boolean) => Promise<void>;
   loadBookings: () => Promise<void>;
   getCleanerById: (id: string) => Cleaner | undefined;
@@ -149,10 +159,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         insured: !!c.has_insurance,
         coversAllMalta: !!c.covers_all_malta,
         coversAllGozo: !!c.covers_all_gozo,
+        availability: c.availability || null,
+        noticeHours: Number(c.notice_hours) || 12,
       } as any;
     });
 
     setCleaners(list);
+
+    // Who is away, so we don't offer them dates they can't do
+    if (list.length) {
+      const { data: offs } = await supabase
+        .from('time_off').select('provider_id, starts_on, ends_on')
+        .in('provider_id', list.map(c=>c.id))
+        .gte('ends_on', new Date().toISOString().slice(0,10));
+      if (offs?.length) {
+        const byId: Record<string, any[]> = {};
+        offs.forEach((o:any)=>{ (byId[o.provider_id] ||= []).push(o); });
+        setCleaners(prev => prev.map((c:any) =>
+          byId[c.id] ? { ...c, timeOff: byId[c.id] } : c));
+      }
+    }
 
     // Profile photos sit in a private bucket — sign them so clients can see them
     const withPhotos = list.filter((c:any)=>c.photoPath);
@@ -259,6 +285,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         locationNote: b.location_note,
         vehicleInfo: b.vehicle_info,
         tradeId: b.trade_id,
+        labourTotal: b.labour_total,
+        quoteAmount: b.quote_amount,
+        quoteParts: b.quote_parts,
+        quoteNote: b.quote_note,
       })));
     }
   };
@@ -285,6 +315,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  /**
+   * Providers who do this trade, are taking work, and are actually free
+   * at that date and time. Used every time a job goes out to the pool.
+   */
+  const matchingProviders = async (opts: {
+    tradeId?: string | null;
+    date: string;
+    time: string;
+    exclude?: string | null;
+  }) => {
+    const { data } = await supabase
+      .from('cleaner_profiles')
+      .select('id, categories, availability, notice_hours')
+      .eq('verification_status','approved')
+      .eq('available', true);
+
+    if (!data?.length) return [];
+
+    const ids = data.map(c => c.id);
+    const { data: offs } = await supabase
+      .from('time_off').select('provider_id, starts_on, ends_on').in('provider_id', ids);
+
+    const offByProvider: Record<string, any[]> = {};
+    (offs || []).forEach((o:any) => {
+      (offByProvider[o.provider_id] ||= []).push(o);
+    });
+
+    return data.filter((c:any) => {
+      if (opts.exclude && c.id === opts.exclude) return false;
+      if (opts.tradeId && !(c.categories || []).includes(opts.tradeId)) return false;
+      return canTakeJob({
+        availability: c.availability,
+        notice_hours: c.notice_hours,
+        timeOff: offByProvider[c.id] || [],
+      }, opts.date, opts.time).ok;
+    });
+  };
+
   const addBooking = async (
     b: Omit<Booking,'id'|'createdAt'>,
     meta?: { multiplier?: number; suppliesByCleaner?: boolean; hourlyRate?: number;
@@ -293,7 +361,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
              pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
-             releasedToPool?: boolean; tradeId?: string|null }
+             releasedToPool?: boolean; tradeId?: string|null;
+             labourTotal?: number|null; partsTotal?: number|null }
   ) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
@@ -332,6 +401,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       location_note: meta?.locationNote ?? null,
       vehicle_info: meta?.vehicleInfo ?? null,
       trade_id: meta?.tradeId ?? null,
+      labour_total: meta?.labourTotal ?? null,
+      parts_total: meta?.partsTotal ?? 0,
       preferred_cleaner_id: b.cleanerId || null,
       preferred_until: meta?.releasedToPool ? null : new Date(Date.now() + 5*60*1000).toISOString(),
       released_to_pool: meta?.releasedToPool ?? false,
@@ -354,18 +425,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // Roadside and pool jobs: alert every approved provider at once
       if (meta?.releasedToPool) {
-        const wanted = meta?.tradeId;
-        supabase.from('cleaner_profiles').select('id, categories')
-          .eq('verification_status','approved')
-          .eq('available', true)
-          .then(({ data }) => {
-            (data || [])
-              .filter(c => !wanted || (c.categories || []).includes(wanted))
-              .forEach(c => notify(c.id, 'job_in_pool', {
-                address: b.address, date: b.date, time: b.time, hours: b.hours,
-                earnings: (b.total / 1.029 / 1.18 * 0.80),
-              }, data.id));
-          });
+        matchingProviders({ tradeId: meta?.tradeId, date: b.date, time: b.time })
+          .then(list => list.forEach(c => notify(c.id, 'job_in_pool', {
+            address: b.address, date: b.date, time: b.time, hours: b.hours,
+            earnings: (b.total / 1.029 / 1.18 * 0.80),
+          }, data.id)));
       } else
       // Tell the preferred cleaner they have a 5-minute priority window
       notify(b.cleanerId, 'new_job_offer', {
@@ -408,18 +472,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const bk = bookings.find(x => x.id === id);
     if (bk) {
-      const { data: pool } = await supabase
-        .from('cleaner_profiles').select('id, categories')
-        .eq('verification_status','approved').eq('available', true);
-      (pool || [])
-        .filter(c => !bk.tradeId || (c.categories || []).includes(bk.tradeId))
-        .forEach(c => {
-        if (c.id === bk.cleanerId) return;
-        notify(c.id, 'job_in_pool', {
-          address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
-          earnings: (bk.total / 1.029 / 1.18 * 0.80),
-        }, id);
+      const pool = await matchingProviders({
+        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.cleanerId,
       });
+      pool.forEach(c => notify(c.id, 'job_in_pool', {
+        address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
+        earnings: (bk.total / 1.029 / 1.18 * 0.80),
+      }, id));
     }
   };
 
@@ -471,6 +530,72 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }, id);
     }
     return true;
+  };
+
+  /** Price a job that couldn't be quoted sight unseen */
+  const sendQuote = async (
+    id: string, labour: number, parts: number, note: string, myId: string
+  ) => {
+    const bk = bookings.find(x => x.id === id);
+    const q = fixedQuote({ labourPrice: labour, partsPrice: parts });
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b, status:'quoted', cleanerId: myId,
+          quoteAmount: labour, quoteParts: parts, quoteNote: note,
+          total: q.clientPays }
+      : b));
+
+    const { error } = await supabase.from('bookings').update({
+      status: 'quoted',
+      cleaner_id: myId,
+      quote_amount: labour,
+      quote_parts: parts,
+      quote_note: note || null,
+      quoted_at: new Date().toISOString(),
+      quote_expires_at: new Date(Date.now() + 24*3600*1000).toISOString(),
+      total_price: q.clientPays,
+      labour_total: q.labourSide,
+      parts_total: parts,
+    }).eq('id', id);
+
+    if (error) { console.log('sendQuote error:', error.message); return; }
+
+    if (bk?.clientId) {
+      notify(bk.clientId, 'quote_sent', {
+        cleanerName: userName || 'Your provider',
+        amount: q.clientPays.toFixed(2),
+        note: note || '',
+      }, id);
+    }
+  };
+
+  /** Client accepts the figure, or the job is dropped */
+  const respondToQuote = async (id: string, accept: boolean) => {
+    const bk = bookings.find(x => x.id === id);
+    if (!bk) return;
+
+    if (accept) {
+      setBookings(prev => prev.map(b => b.id === id ? { ...b, status:'accepted' } : b));
+      const { error } = await supabase.from('bookings')
+        .update({ status: 'accepted' }).eq('id', id);
+      if (error) console.log('respondToQuote error:', error.message);
+
+      if (bk.cleanerId) {
+        notify(bk.cleanerId, 'quote_accepted', {
+          amount: Number(bk.total).toFixed(2),
+          address: bk.address, date: bk.date, time: bk.time,
+        }, id);
+      }
+    } else {
+      setBookings(prev => prev.map(b => b.id === id ? { ...b, status:'cancelled' } : b));
+      const { error } = await supabase.from('bookings')
+        .update({ status: 'cancelled' }).eq('id', id);
+      if (error) console.log('respondToQuote error:', error.message);
+
+      if (bk.cleanerId) {
+        notify(bk.cleanerId, 'quote_declined', { address: bk.address }, id);
+      }
+    }
   };
 
   /** Provider can't make the slot and offers another one */
@@ -556,18 +681,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       // tell everyone else it's going spare
-      const { data: pool } = await supabase
-        .from('cleaner_profiles').select('id, categories')
-        .eq('verification_status','approved').eq('available', true);
-      (pool || [])
-        .filter(c => !bk.tradeId || (c.categories || []).includes(bk.tradeId))
-        .forEach(c => {
-        if (c.id === bk.cleanerId) return;
-        notify(c.id, 'job_in_pool', {
-          address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
-          earnings: (bk.total / 1.029 / 1.18 * 0.80),
-        }, id);
+      const pool = await matchingProviders({
+        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.cleanerId,
       });
+      pool.forEach(c => notify(c.id, 'job_in_pool', {
+        address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
+        earnings: (bk.total / 1.029 / 1.18 * 0.80),
+      }, id));
     }
   };
 
@@ -706,6 +826,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const getCleanerById = (id: string) => cleaners.find(c => c.id === id);
 
+
   /** Trades with at least one approved provider signed up */
   const availableTrades = Array.from(new Set(
     cleaners.flatMap(c => (c as any).categories || [])
@@ -720,6 +841,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
       releaseToPool, reassignCleaner, acceptJob, proposeTime, respondToProposal,
+      sendQuote, respondToQuote,
       loadBookings, getCleanerById,
       userRole, userName, userId, myCategories,
     }}>

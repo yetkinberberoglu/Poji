@@ -7,11 +7,13 @@ import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
 import { useApp } from '../context/AppContext';
 import Avatar from '../components/Avatar';
+import { canTakeJob } from '../lib/availability';
 import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
-  groupTasks, quote, estimateHours,
-  type ServiceType, type ServiceExtra, type PropertySize
+  groupTasks, quote, fixedQuote, estimateHours,
+  loadServicePrices, effectiveService,
+  type ServiceType, type ServiceExtra, type PropertySize, type ProviderService
 } from '../lib/services';
 
 const TIMES = [
@@ -19,16 +21,14 @@ const TIMES = [
   '13:00','14:00','15:00','16:00','17:00','18:00',
 ];
 
-/** How far ahead clients can book */
 const DAYS_AHEAD = 30;
-/** Cleaners need a little notice before a job starts */
 const LEAD_HOURS = 2;
 
 const iso = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
 const buildDays = () => {
-  const out: { value:string; dayName:string; dayNum:number; month:string; isToday:boolean; isTomorrow:boolean; isWeekend:boolean }[] = [];
+  const out: any[] = [];
   const today = new Date(); today.setHours(0,0,0,0);
   for (let i = 0; i < DAYS_AHEAD; i++) {
     const d = new Date(today);
@@ -46,7 +46,6 @@ const buildDays = () => {
   return out;
 };
 
-/** A slot today is only bookable if it's far enough in the future */
 const slotAvailable = (dateValue: string, time: string) => {
   const now = new Date();
   if (dateValue !== iso(now)) return true;
@@ -55,9 +54,11 @@ const slotAvailable = (dateValue: string, time: string) => {
   slot.setHours(h, m, 0, 0);
   return slot.getTime() - now.getTime() >= LEAD_HOURS * 3600 * 1000;
 };
-const STEPS = ['Service','Place','Extras','Cleaner','When','Confirm'];
 
 const fmtH = (h:number) => h % 1 === 0 ? `${h}h` : `${Math.floor(h)}h 30m`;
+const fmtM = (m:number) => m >= 60
+  ? (m % 60 === 0 ? `${m/60}h` : `${Math.floor(m/60)}h ${m%60}m`)
+  : `${m}m`;
 
 export default function BookingScreen() {
   const { addBooking, cleaners } = useApp();
@@ -70,12 +71,15 @@ export default function BookingScreen() {
   const [extras, setExtras] = useState<ServiceExtra[]>([]);
   const [sizes, setSizes]   = useState<PropertySize[]>([]);
   const [catLoading, setCatLoading] = useState(true);
+  const [prices, setPrices] = useState<Record<string, ProviderService>>({});
+  const [hasTasks, setHasTasks] = useState<Record<string, boolean>>({});
 
   const [svc, setSvc]             = useState<string>('');
   const [chosenExtras, setChosen] = useState<string[]>([]);
   const [suppliesByCleaner, setSupplies] = useState(false);
   const [size, setSize]           = useState('1bed');
   const [address, setAddr]        = useState('');
+  const [notes, setNotes]         = useState('');
   const [savedAddr, setSavedAddr] = useState<{line:string; locality:string}|null>(null);
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
@@ -83,7 +87,6 @@ export default function BookingScreen() {
   const [pickedCleaner, setPicked] = useState<string|null>(params.cleanerId || null);
   const [lockedToCleaner, setLocked] = useState<boolean>(!!params.cleanerId);
   const [days] = useState(buildDays);
-  const [monthOffset, setMonthOffset] = useState(0);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [manualHours, setManualHours] = useState<number|null>(null);
@@ -94,54 +97,104 @@ export default function BookingScreen() {
   const svcType = types.find(t => t.id === svc);
   const sizeObj = sizes.find(z => z.id === size);
 
+  /** Everything below branches on this. */
+  const model = svcType?.pricing_model ?? 'hourly';
+  const isFixed = model === 'fixed';
+  const isQuote = model === 'quote';
+
+  const STEPS = isQuote
+    ? ['Service','Address','Provider','When','Confirm']
+    : isFixed
+    ? ['Service','Address','Provider','When','Confirm']
+    : ['Service','Place','Extras','Provider','When','Confirm'];
+
+  // which screen is which, by name rather than number
+  const stepName = STEPS[step];
+
   const multiplier  = svcType?.multiplier ?? 1;
   const baseMinutes = svcType?.base_minutes ?? 120;
   const sizeFactor  = sizeObj?.factor ?? 1;
   const svcMinHours = svcType?.min_hours ?? 3;
 
-  // extras only make sense for hourly home services
-  const showExtras = !!svcType && (svcType.pricing_model ?? 'hourly') === 'hourly';
+  const showExtras = !isFixed && !isQuote;
   const selectedExtras = showExtras ? extras.filter(e => chosenExtras.includes(e.id)) : [];
   const extraMinutes   = selectedExtras.reduce((s,e)=>s+Number(e.extra_minutes),0);
 
-  // cleaners who can send this many people
   const teamSizeOf = (c: any) => {
     const n = Number(c?.teamSize);
     return Number.isFinite(n) && n > 0 ? n : 1;
   };
 
-  const allCapable = cleaners.filter(c => teamSizeOf(c) >= num);
+  // team size only matters for hourly work
+  const flat = !isQuote && !showExtras;
 
-  // If the client came in from one cleaner's profile, keep them on that cleaner
+  /** Does this provider cover the trade the chosen service belongs to? */
+  const offersService = (c: any) => {
+    if (!svcType) return true;
+    const own = prices[c.id];
+    if (own) return own.active !== false;            // they've priced it
+    const trade = svcType.trade_id;
+    if (!trade) return true;
+    return (c.categories || []).includes(trade);     // falls back to the trade
+  };
+
+  const allCapable = cleaners
+    .filter(offersService)
+    .filter(c => flat || isQuote || teamSizeOf(c) >= num);
   const capable = lockedToCleaner
     ? allCapable.filter(c => c.id === params.cleanerId)
     : allCapable;
 
-  const lockedCleaner = cleaners.find(c => c.id === params.cleanerId) || null;
+  const lockedCleaner  = cleaners.find(c => c.id === params.cleanerId) || null;
   const lockedCapacity = lockedCleaner ? teamSizeOf(lockedCleaner) : 0;
   const cleaner = cleaners.find(c => c.id === pickedCleaner) || null;
 
-  // hours depend on the chosen cleaner's minimum
   const cleanerMin = (cleaner as any)?.minHours ?? 2;
   const minHours   = Math.max(svcMinHours, cleanerMin);
   const est = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours, numCleaners: num });
   const hours = manualHours ?? est.hours;
 
   const baseRate = cleaner?.rate ?? 0;
-  const p = quote({ baseRate, hours, numCleaners: num, multiplier, suppliesByCleaner });
 
-  /** what a given cleaner would charge for this exact job */
+  // Two completely different sums
+  const hourlyQuote = quote({ baseRate, hours, numCleaners: num, multiplier, suppliesByCleaner });
+  const effFor = (providerId?: string|null) =>
+    svcType ? effectiveService(svcType, providerId ? prices[providerId] : null) : null;
+
+  const myEff = effFor(pickedCleaner);
+
+  const flatQuote = fixedQuote({
+    labourPrice: myEff?.labour ?? Number(svcType?.labour_price) ?? 0,
+    partsPrice:  myEff?.parts  ?? Number(svcType?.parts_price)  ?? 0,
+    calloutFee:  Number(svcType?.callout_fee) || 0,
+  });
+
+  const total = isQuote ? 0 : isFixed ? flatQuote.clientPays : hourlyQuote.clientPays;
+
+  /** What this provider would charge for this exact job */
   const quoteFor = (c: any) => {
+    const eff = effFor(c.id);
+
+    if (isQuote) {
+      return {
+        total: null as number|null,
+        label: eff?.priceMin && eff?.priceMax
+          ? `€${eff.priceMin}–${eff.priceMax}` : 'Quote first',
+      };
+    }
+
+    if (isFixed) {
+      const q = fixedQuote({ labourPrice: eff?.labour || 0, partsPrice: eff?.parts || 0 });
+      return { total: q.clientPays, label: fmtM(eff?.minutes || 60) };
+    }
     const cMin = Math.max(svcMinHours, c.minHours ?? 2);
     const e = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours: cMin, numCleaners: num });
     const q = quote({ baseRate: c.rate, hours: e.hours, numCleaners: num, multiplier, suppliesByCleaner });
-    return { hours: e.hours, total: q.clientPays };
+    return { total: q.clientPays, label: fmtH(e.hours) };
   };
 
   useEffect(() => {
     (async () => {
-      // Which trade are we booking? Either passed in, or taken from the
-      // provider's own registered trades.
       const chosen = cleaners.find(c => c.id === (params.cleanerId || ''));
       const theirTrades = (chosen as any)?.categories || [];
       const tradeFilter = params.trade
@@ -153,6 +206,15 @@ export default function BookingScreen() {
       ]);
       setTypes(t); setExtras(e); setSizes(z);
       if (t.length && !t.find(x => x.id === svc)) setSvc(t[0].id);
+
+      // only offer "what's included" where there is actually a list
+      const { data: taskRows } = await supabase
+        .from('service_tasks').select('service_type_id')
+        .in('service_type_id', t.map(x => x.id));
+      const found: Record<string, boolean> = {};
+      (taskRows || []).forEach((r:any) => { found[r.service_type_id] = true; });
+      setHasTasks(found);
+
       setCatLoading(false);
     })();
   }, [params.cleanerId, params.trade, cleaners.length]);
@@ -173,16 +235,19 @@ export default function BookingScreen() {
     })();
   }, []);
 
-  useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
-
   useEffect(() => {
-    if (date && time && !slotAvailable(date, time)) setTime('');
-  }, [date]);
+    if (!svc) { setPrices({}); return; }
+    loadServicePrices(svc).then(setPrices);
+  }, [svc]);
 
-  // drop a cleaner who can no longer cover the team size
+  useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
+  useEffect(() => { if (date && time && !slotAvailable(date, time)) setTime(''); }, [date]);
   useEffect(() => {
     if (pickedCleaner && !allCapable.find(c => c.id === pickedCleaner)) setPicked(null);
   }, [num, cleaners]);
+
+  // switching service can change the shape of the flow — don't strand them
+  useEffect(() => { if (step >= STEPS.length) setStep(STEPS.length - 1); }, [isFixed]);
 
   const openTasks = async (typeId: string) => {
     const tasks = await loadTasksFor(typeId);
@@ -194,7 +259,7 @@ export default function BookingScreen() {
     setChosen(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
 
   const confirm = async () => {
-    if (!cleaner) return;
+    if (!cleaner || !svcType) return;
     setLoad(true);
     try {
       await addBooking({
@@ -202,17 +267,29 @@ export default function BookingScreen() {
         address: address || '12 Tower Road, Sliema',
         date: date || iso(new Date()),
         time: time || '10:00',
-        hours, numCleaners: num,
-        propertyType: size, serviceType: svc,
-        total: p.clientPays, status: 'pending',
+        hours: isFixed ? (Number(svcType.typical_minutes) || 60) / 60 : hours,
+        numCleaners: isFixed ? 1 : num,
+        propertyType: isFixed ? 'n/a' : size,
+        serviceType: svc,
+        total,
+        status: 'pending',
       } as any, {
-        multiplier, suppliesByCleaner, hourlyRate: baseRate,
-        extraIds: chosenExtras, propertySize: size,
-        estimatedMinutes: est.totalMinutes,
-        tradeId: svcType?.trade_id || params.trade || null,
+        multiplier: isFixed ? 1 : multiplier,
+        suppliesByCleaner: isFixed ? false : suppliesByCleaner,
+        hourlyRate: isFixed ? 0 : baseRate,
+        extraIds: isFixed ? [] : chosenExtras,
+        propertySize: isFixed ? 'n/a' : size,
+        estimatedMinutes: isFixed
+          ? (Number(svcType.typical_minutes) || 60)
+          : est.totalMinutes,
         extrasForChecklist: selectedExtras,
+        tradeId: svcType.trade_id || params.trade || null,
+        pricingModel: isQuote ? 'quote' : isFixed ? 'fixed' : 'hourly',
+        labourTotal: isFixed ? flatQuote.labourSide : null,
+        partsTotal:  isFixed ? flatQuote.parts : 0,
+        locationNote: notes.trim() || null,
       });
-      Alert.alert('✅ Booking Confirmed!','Your cleaner has been notified.',[
+      Alert.alert('✅ Booking Confirmed!','Your provider has been notified.',[
         {text:'View Bookings', onPress:()=>router.replace('/(tabs)/bookings')},
       ]);
     } catch { Alert.alert('Error','Something went wrong. Please try again.'); }
@@ -220,15 +297,63 @@ export default function BookingScreen() {
   };
 
   const canContinue =
-    step === 1 ? !!address :
-    step === 3 ? !!pickedCleaner :
-    step === 4 ? !!date && !!time :
+    stepName === 'Service'  ? !!svc :
+    stepName === 'Place'    ? !!address :
+    stepName === 'Address'  ? !!address :
+    stepName === 'Provider' ? !!pickedCleaner :
+    stepName === 'When'     ? !!date && !!time :
     true;
 
   const blockedMsg =
-    step === 1 ? 'Enter an address first' :
-    step === 3 ? 'Pick a cleaner to continue' :
-    step === 4 ? 'Pick a date and time' : '';
+    stepName === 'Service'  ? 'Pick a service' :
+    (stepName === 'Place' || stepName === 'Address') ? 'Enter an address first' :
+    stepName === 'Provider' ? 'Pick a provider to continue' :
+    stepName === 'When'     ? 'Pick a date and time' : '';
+
+  /* ─────────── shared blocks ─────────── */
+
+  const AddressBlock = (
+    <>
+      {loadingAddr ? (
+        <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
+      ) : (
+        <>
+          {savedAddr && (
+            <TouchableOpacity style={[s.addrCard, useSaved&&s.addrCardOn]}
+              onPress={()=>{ setUseSaved(true);
+                setAddr(`${savedAddr.line}${savedAddr.locality?', '+savedAddr.locality:''}`); }}>
+              <View style={[s.radio, useSaved&&s.radioOn]}>
+                {useSaved && <View style={s.radioDot}/>}
+              </View>
+              <View style={{flex:1}}>
+                <View style={s.addrHead}>
+                  <Text style={s.addrLabel}>🏠  My home</Text>
+                  <View style={s.defaultTag}><Text style={s.defaultTagTxt}>Default</Text></View>
+                </View>
+                <Text style={s.addrLine}>{savedAddr.line}</Text>
+                {!!savedAddr.locality && <Text style={s.addrLocality}>{savedAddr.locality}</Text>}
+              </View>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[s.addrCard, !useSaved&&s.addrCardOn]}
+            onPress={()=>{ setUseSaved(false); if (savedAddr) setAddr(''); }}>
+            <View style={[s.radio, !useSaved&&s.radioOn]}>
+              {!useSaved && <View style={s.radioDot}/>}
+            </View>
+            <View style={{flex:1}}>
+              <Text style={s.addrLabel}>📍  A different address</Text>
+              <Text style={s.addrHint}>Office, holiday let, a friend's place…</Text>
+            </View>
+          </TouchableOpacity>
+          {!useSaved && (
+            <TextInput style={[s.input,{marginTop:10}]}
+              placeholder="e.g. 12 Tower Road, Sliema" placeholderTextColor={C.muted}
+              value={address} onChangeText={setAddr} autoFocus />
+          )}
+        </>
+      )}
+    </>
+  );
 
   return (
     <View style={s.wrap}>
@@ -236,7 +361,7 @@ export default function BookingScreen() {
         <TouchableOpacity onPress={()=>step>0?setStep(step-1):router.back()}>
           <Text style={s.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={s.title}>Book a Cleaner</Text>
+        <Text style={s.title}>Book a service</Text>
         <Text style={s.stepNum}>{step+1}/{STEPS.length}</Text>
       </View>
 
@@ -253,8 +378,8 @@ export default function BookingScreen() {
 
       <ScrollView style={s.body} showsVerticalScrollIndicator={false}>
 
-        {/* ── 0 · SERVICE — no prices here ── */}
-        {step===0 && (
+        {/* ══ SERVICE ══ */}
+        {stepName === 'Service' && (
           <View style={s.step}>
             {catLoading ? (
               <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
@@ -263,6 +388,7 @@ export default function BookingScreen() {
                 <Text style={s.stepIntro}>
                   What do you need{cleaner ? ` from ${cleaner.name.split(' ')[0]}` : ''}?
                 </Text>
+
                 {types.length === 0 && (
                   <View style={s.noSvcBox}>
                     <Text style={s.noSvcIcon}>🤔</Text>
@@ -273,8 +399,17 @@ export default function BookingScreen() {
                     </Text>
                   </View>
                 )}
+
                 {types.map(t=>{
                   const on = svc===t.id;
+                  const m = t.pricing_model ?? 'hourly';
+                  const fixed  = m === 'fixed';
+                  const byQuote= m === 'quote';
+                  const q = fixed ? fixedQuote({
+                    labourPrice: Number(t.labour_price) || 0,
+                    partsPrice:  Number(t.parts_price)  || 0,
+                    calloutFee:  Number(t.callout_fee)  || 0,
+                  }) : null;
                   return (
                     <TouchableOpacity key={t.id} style={[s.svcCard, on&&s.svcCardOn]}
                       onPress={()=>setSvc(t.id)}>
@@ -283,24 +418,83 @@ export default function BookingScreen() {
                         <View style={{flex:1}}>
                           <Text style={s.svcName}>{t.name}</Text>
                           <Text style={s.svcDesc}>{t.description}</Text>
+
+                          {fixed && q && (
+                            <View style={s.svcBreak}>
+                              <Text style={s.svcBreakRow}>
+                                Service €{q.labour.toFixed(0)}
+                                {q.parts > 0 ? `  ·  ${t.parts_label || 'Parts'} €${q.parts.toFixed(0)}` : ''}
+                              </Text>
+                              <Text style={s.svcBreakSub}>
+                                Typical price — each provider sets their own
+                              </Text>
+                            </View>
+                          )}
+
+                          {byQuote && (
+                            <View style={s.svcBreak}>
+                              <Text style={s.svcBreakSub}>
+                                {t.quote_prompt || 'Your provider quotes after you describe the job.'}
+                              </Text>
+                            </View>
+                          )}
                         </View>
-                        <View style={[s.radio, on&&s.radioOn]}>
-                          {on && <View style={s.radioDot}/>}
-                        </View>
+
+                        {fixed && q ? (
+                          <View style={{alignItems:'flex-end'}}>
+                            <Text style={[s.svcPrice, on&&{color:C.primary}]}>
+                              €{q.clientPays.toFixed(0)}
+                            </Text>
+                            <Text style={s.svcPriceSub}>typical</Text>
+                          </View>
+                        ) : byQuote && t.price_min && t.price_max ? (
+                          <View style={{alignItems:'flex-end'}}>
+                            <Text style={[s.svcRange, on&&{color:C.primary}]}>
+                              €{t.price_min}–{t.price_max}
+                            </Text>
+                            <Text style={s.svcPriceSub}>they quote</Text>
+                          </View>
+                        ) : (
+                          <View style={[s.radio, on&&s.radioOn]}>
+                            {on && <View style={s.radioDot}/>}
+                          </View>
+                        )}
                       </View>
-                      <TouchableOpacity style={s.svcFoot} onPress={()=>openTasks(t.id)}>
-                        <Text style={s.svcLink}>What's included? ›</Text>
-                      </TouchableOpacity>
+
+                      {hasTasks[t.id] && (
+                        <TouchableOpacity style={s.svcFoot} onPress={()=>openTasks(t.id)}>
+                          <Text style={s.svcLink}>What's included? ›</Text>
+                        </TouchableOpacity>
+                      )}
                     </TouchableOpacity>
                   );
                 })}
+
+                {isQuote && (
+                  <View style={s.fixedNote}>
+                    <Text style={s.fixedNoteTxt}>
+                      💬  You'll message your provider first. They send a price, you
+                      accept or decline — nobody travels until you've agreed.
+                    </Text>
+                  </View>
+                )}
+
+                {isFixed && (
+                  <View style={s.fixedNote}>
+                    <Text style={s.fixedNoteTxt}>
+                      🔒  These prices are fixed. If the job turns out to need parts
+                      beyond what's listed, your provider quotes you separately before
+                      doing anything.
+                    </Text>
+                  </View>
+                )}
               </>
             )}
           </View>
         )}
 
-        {/* ── 1 · PLACE ── */}
-        {step===1 && (
+        {/* ══ PLACE — hourly only ══ */}
+        {stepName === 'Place' && (
           <View style={s.step}>
             <Text style={s.stepIntro}>Tell us about the place</Text>
 
@@ -315,70 +509,36 @@ export default function BookingScreen() {
               ))}
             </View>
 
-            <Text style={s.lbl}>Where should we clean?</Text>
-            {loadingAddr ? (
-              <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
-            ) : (
-              <>
-                {savedAddr && (
-                  <TouchableOpacity style={[s.addrCard, useSaved&&s.addrCardOn]}
-                    onPress={()=>{ setUseSaved(true);
-                      setAddr(`${savedAddr.line}${savedAddr.locality?', '+savedAddr.locality:''}`); }}>
-                    <View style={[s.radio, useSaved&&s.radioOn]}>
-                      {useSaved && <View style={s.radioDot}/>}
-                    </View>
-                    <View style={{flex:1}}>
-                      <View style={s.addrHead}>
-                        <Text style={s.addrLabel}>🏠  My home</Text>
-                        <View style={s.defaultTag}><Text style={s.defaultTagTxt}>Default</Text></View>
-                      </View>
-                      <Text style={s.addrLine}>{savedAddr.line}</Text>
-                      {!!savedAddr.locality && <Text style={s.addrLocality}>{savedAddr.locality}</Text>}
-                    </View>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity style={[s.addrCard, !useSaved&&s.addrCardOn]}
-                  onPress={()=>{ setUseSaved(false); if (savedAddr) setAddr(''); }}>
-                  <View style={[s.radio, !useSaved&&s.radioOn]}>
-                    {!useSaved && <View style={s.radioDot}/>}
-                  </View>
-                  <View style={{flex:1}}>
-                    <Text style={s.addrLabel}>📍  A different address</Text>
-                    <Text style={s.addrHint}>Office, holiday let, a friend's place…</Text>
-                  </View>
-                </TouchableOpacity>
-                {!useSaved && (
-                  <TextInput style={[s.input,{marginTop:10}]}
-                    placeholder="e.g. 12 Tower Road, Sliema" placeholderTextColor={C.muted}
-                    value={address} onChangeText={setAddr} autoFocus />
-                )}
-              </>
-            )}
+            <Text style={s.lbl}>Where should we come?</Text>
+            {AddressBlock}
           </View>
         )}
 
-        {/* ── 2 · EXTRAS ── */}
-        {step===2 && !showExtras && (
+        {/* ══ ADDRESS — fixed-price jobs ══ */}
+        {stepName === 'Address' && (
           <View style={s.step}>
-            <Text style={s.stepIntro}>Materials</Text>
+            <Text style={s.stepIntro}>Where is it?</Text>
             <Text style={s.hint}>
-              Who supplies what's needed for the job?
+              Your provider only sees this once they've accepted the job.
             </Text>
-            <View style={s.supplyRow}>
-              {[{k:false,l:'I provide them',d:'Nothing added'},
-                {k:true, l:'Provider brings them',d:'Small hourly surcharge'}].map(o=>(
-                <TouchableOpacity key={String(o.k)}
-                  style={[s.supplyCard, suppliesByCleaner===o.k&&s.supplyCardOn]}
-                  onPress={()=>setSupplies(o.k)}>
-                  <Text style={[s.supplyLbl, suppliesByCleaner===o.k&&s.supplyLblOn]}>{o.l}</Text>
-                  <Text style={s.supplyDesc}>{o.d}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {AddressBlock}
+
+            <Text style={s.lbl}>Anything they should know?</Text>
+            <TextInput style={[s.input,{minHeight:90}]} value={notes} onChangeText={setNotes}
+              placeholder={
+                svcType?.trade_id === 'water'
+                  ? 'e.g. under-sink unit, 3 stages, the tap drips'
+                  : 'Make and model, where it is, how to get in'
+              }
+              placeholderTextColor={C.muted} multiline textAlignVertical="top" />
+            <Text style={s.note}>
+              Optional, but it helps them arrive with the right thing.
+            </Text>
           </View>
         )}
 
-        {step===2 && showExtras && (
+        {/* ══ EXTRAS — hourly only ══ */}
+        {stepName === 'Extras' && (
           <View style={s.step}>
             <Text style={s.stepIntro}>Anything extra?</Text>
             <Text style={s.hint}>
@@ -406,7 +566,7 @@ export default function BookingScreen() {
             <Text style={s.lbl}>Cleaning materials</Text>
             <View style={s.supplyRow}>
               {[{k:false,l:'I provide them',d:'Nothing added'},
-                {k:true, l:'Cleaner brings them',d:'Small hourly surcharge'}].map(o=>(
+                {k:true, l:'Provider brings them',d:'Small hourly surcharge'}].map(o=>(
                 <TouchableOpacity key={String(o.k)}
                   style={[s.supplyCard, suppliesByCleaner===o.k&&s.supplyCardOn]}
                   onPress={()=>setSupplies(o.k)}>
@@ -418,60 +578,63 @@ export default function BookingScreen() {
           </View>
         )}
 
-        {/* ── 3 · CLEANER — first time prices appear ── */}
-        {step===3 && (
+        {/* ══ PROVIDER ══ */}
+        {stepName === 'Provider' && (
           <View style={s.step}>
             {lockedToCleaner && lockedCleaner && (
               <View style={s.lockBanner}>
                 <Text style={s.lockTxt}>
                   You're booking <Text style={{fontWeight:'800'}}>{lockedCleaner.name}</Text>
-                  {lockedCapacity > 1
-                    ? ` — they can send up to ${lockedCapacity} cleaners.`
-                    : ' — they work solo.'}
+                  {!isFixed && (lockedCapacity > 1
+                    ? ` — they can send up to ${lockedCapacity} people.`
+                    : ' — they work solo.')}
                 </Text>
                 <TouchableOpacity onPress={()=>{ setLocked(false); setPicked(null); }}>
-                  <Text style={s.lockLink}>Compare other cleaners ›</Text>
+                  <Text style={s.lockLink}>Compare other providers ›</Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            <Text style={s.stepIntro}>How many cleaners?</Text>
-            <View style={s.chips}>
-              {[1,2,3].map(n=>{
-                const pool  = lockedToCleaner
-                  ? (lockedCapacity >= n ? 1 : 0)
-                  : cleaners.filter(c => teamSizeOf(c) >= n).length;
-                const off = pool === 0;
-                return (
-                  <TouchableOpacity key={n}
-                    style={[s.chip, num===n&&s.chipOn, off&&s.chipOff]}
-                    disabled={off} onPress={()=>setNum(n)}>
-                    <Text style={[s.chipTxt, num===n&&s.chipTxtOn, off&&s.chipTxtOff]}>
-                      {n} {n===1?'cleaner':'cleaners'}
-                    </Text>
-                    {n>1 && !lockedToCleaner && pool>0 && (
-                      <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{pool} available</Text>
-                    )}
-                    {n>1 && lockedToCleaner && off && (
-                      <Text style={[s.chipSub,{color:C.muted}]}>not offered</Text>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {num > 1 && (
-              <Text style={s.teamNote}>
-                👥 The work is shared, so the job finishes sooner.
-              </Text>
+            {!isFixed && (
+              <>
+                <Text style={s.stepIntro}>How many people?</Text>
+                <View style={s.chips}>
+                  {[1,2,3].map(n=>{
+                    const pool = lockedToCleaner
+                      ? (lockedCapacity >= n ? 1 : 0)
+                      : cleaners.filter(c => teamSizeOf(c) >= n).length;
+                    const off = pool === 0;
+                    return (
+                      <TouchableOpacity key={n}
+                        style={[s.chip, num===n&&s.chipOn, off&&s.chipOff]}
+                        disabled={off} onPress={()=>setNum(n)}>
+                        <Text style={[s.chipTxt, num===n&&s.chipTxtOn, off&&s.chipTxtOff]}>
+                          {n} {n===1?'person':'people'}
+                        </Text>
+                        {n>1 && !lockedToCleaner && pool>0 && (
+                          <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{pool} available</Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {num > 1 && (
+                  <Text style={s.teamNote}>
+                    👥 The work is shared, so the job finishes sooner.
+                  </Text>
+                )}
+              </>
             )}
 
-            <Text style={s.lbl}>
-              {lockedToCleaner ? 'Your cleaner' : 'Choose your cleaner'}
+            <Text style={[s.lbl, isFixed && {marginTop:8}]}>
+              {lockedToCleaner ? 'Your provider' : 'Choose your provider'}
             </Text>
             <Text style={s.hint}>
-              {lockedToCleaner
-                ? 'Tap the card to confirm this is the price for your job.'
-                : `Only cleaners who can send ${num} ${num===1?'person':'people'} are shown. Each sets their own rate.`}
+              {isQuote
+                ? "Nobody can price this without seeing it. Pick someone, message them, and they'll send a figure before anyone travels."
+                : isFixed
+                ? 'Each provider sets their own price and supplies their own parts.'
+                : `Only providers who can send ${num} ${num===1?'person':'people'} are shown. Each sets their own rate.`}
             </Text>
 
             {capable.length === 0 ? (
@@ -479,26 +642,29 @@ export default function BookingScreen() {
                 <Text style={s.emptyIcon}>👥</Text>
                 <Text style={s.emptyTxt}>
                   {lockedToCleaner
-                    ? `${lockedCleaner?.name || 'This cleaner'} can't send ${num} people`
-                    : `No one can send ${num} cleaners`}
+                    ? `${lockedCleaner?.name || 'This provider'} can't cover this`
+                    : 'Nobody available'}
                 </Text>
-                <Text style={s.emptySub}>
-                  {lockedToCleaner
-                    ? 'Pick fewer cleaners, or compare other providers.'
-                    : 'Try fewer cleaners for this job.'}
-                </Text>
+                <Text style={s.emptySub}>Try a different option for this job.</Text>
                 {lockedToCleaner && (
                   <TouchableOpacity style={s.emptyBtn}
                     onPress={()=>{ setLocked(false); setPicked(null); }}>
-                    <Text style={s.emptyBtnTxt}>Compare other cleaners</Text>
+                    <Text style={s.emptyBtnTxt}>Compare other providers</Text>
                   </TouchableOpacity>
                 )}
               </View>
             ) : capable.map(c=>{
               const on = pickedCleaner === c.id;
               const q  = quoteFor(c as any);
+              const free = (!date || !time) ? { ok:true } : canTakeJob({
+                availability: (c as any).availability,
+                notice_hours: (c as any).noticeHours,
+                timeOff: (c as any).timeOff,
+              }, date, time);
               return (
-                <TouchableOpacity key={c.id} style={[s.clCard, on&&s.clCardOn]}
+                <TouchableOpacity key={c.id}
+                  style={[s.clCard, on&&s.clCardOn, !free.ok&&s.clCardOff]}
+                  disabled={!free.ok}
                   onPress={()=>setPicked(c.id)}>
                   <Avatar photoUrl={(c as any).photoUrl} initials={c.initials} color={c.color} size={50} />
                   <View style={{flex:1}}>
@@ -508,13 +674,31 @@ export default function BookingScreen() {
                       {(c as any).insured && <Text style={s.insDot}>🛡</Text>}
                     </View>
                     <Text style={s.clMeta}>
-                      ⭐ {c.rating} · €{c.rate}/hr · {teamSizeOf(c)===1 ? 'solo' : `team of ${teamSizeOf(c)}`}
+                      ⭐ {c.rating}
+                      {isFixed ? '' : ` · €${c.rate}/hr`}
+                      {' · '}{teamSizeOf(c)===1 ? 'solo' : `team of ${teamSizeOf(c)}`}
                     </Text>
                     <Text style={s.clAreas}>{c.areas.slice(0,3).join(' · ')}</Text>
+                    {!free.ok && (
+                      <Text style={s.clBusy}>
+                        {(free as any).reason === 'away' ? 'Away on that date'
+                          : (free as any).reason === 'short_notice' ? 'Needs more notice'
+                          : "Doesn't work that slot"}
+                      </Text>
+                    )}
                   </View>
                   <View style={{alignItems:'flex-end'}}>
-                    <Text style={[s.clTotal, on&&{color:C.primary}]}>€{q.total.toFixed(0)}</Text>
-                    <Text style={s.clHours}>{fmtH(q.hours)}</Text>
+                    {q.total != null ? (
+                      <>
+                        <Text style={[s.clTotal, on&&{color:C.primary}]}>€{q.total.toFixed(0)}</Text>
+                        <Text style={s.clHours}>{q.label}</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={[s.clRange, on&&{color:C.primary}]}>{q.label}</Text>
+                        <Text style={s.clHours}>they quote</Text>
+                      </>
+                    )}
                   </View>
                 </TouchableOpacity>
               );
@@ -522,50 +706,61 @@ export default function BookingScreen() {
           </View>
         )}
 
-        {/* ── 4 · WHEN ── */}
-        {step===4 && (
+        {/* ══ WHEN ══ */}
+        {stepName === 'When' && (
           <View style={s.step}>
             <Text style={s.stepIntro}>When should we come?</Text>
 
-            <View style={s.estBox}>
-              <Text style={s.estTitle}>⏱  We estimate {fmtH(hours)}</Text>
-              <View style={s.estRows}>
-                <View style={s.estRow}>
-                  <Text style={s.estLbl}>{svcType?.name} · {sizeObj?.name}</Text>
-                  <Text style={s.estVal}>{Math.round(baseMinutes*sizeFactor)}m</Text>
-                </View>
-                {selectedExtras.map(e=>(
-                  <View key={e.id} style={s.estRow}>
-                    <Text style={s.estLbl}>{e.icon}  {e.name}</Text>
-                    <Text style={s.estVal}>+{e.extra_minutes}m</Text>
-                  </View>
-                ))}
-                {num > 1 && (
+            {isFixed ? (
+              <View style={s.estBox}>
+                <Text style={s.estTitle}>
+                  ⏱  About {fmtM(Number(svcType?.typical_minutes) || 60)} on site
+                </Text>
+                <Text style={s.estNote}>
+                  Fixed price — the clock doesn't change what you pay.
+                </Text>
+              </View>
+            ) : (
+              <View style={s.estBox}>
+                <Text style={s.estTitle}>⏱  We estimate {fmtH(hours)}</Text>
+                <View style={s.estRows}>
                   <View style={s.estRow}>
-                    <Text style={s.estLbl}>Split across {num} cleaners</Text>
-                    <Text style={s.estVal}>÷{num}</Text>
+                    <Text style={s.estLbl}>{svcType?.name} · {sizeObj?.name}</Text>
+                    <Text style={s.estVal}>{Math.round(baseMinutes*sizeFactor)}m</Text>
+                  </View>
+                  {selectedExtras.map(e=>(
+                    <View key={e.id} style={s.estRow}>
+                      <Text style={s.estLbl}>{e.icon}  {e.name}</Text>
+                      <Text style={s.estVal}>+{e.extra_minutes}m</Text>
+                    </View>
+                  ))}
+                  {num > 1 && (
+                    <View style={s.estRow}>
+                      <Text style={s.estLbl}>Split across {num} people</Text>
+                      <Text style={s.estVal}>÷{num}</Text>
+                    </View>
+                  )}
+                </View>
+                {est.wasRaised && (
+                  <Text style={s.estNote}>Raised to the {minHours}h minimum for this service.</Text>
+                )}
+                <TouchableOpacity onPress={()=>setManualHours(manualHours===null ? est.hours : null)}>
+                  <Text style={s.adjustTxt}>
+                    {manualHours===null ? 'Adjust the hours myself' : 'Use our estimate'}
+                  </Text>
+                </TouchableOpacity>
+                {manualHours !== null && (
+                  <View style={s.chips}>
+                    {[2,2.5,3,3.5,4,5,6,7,8].filter(h=>h>=minHours).map(h=>(
+                      <TouchableOpacity key={h} style={[s.chip, hours===h&&s.chipOn]}
+                        onPress={()=>setManualHours(h)}>
+                        <Text style={[s.chipTxt, hours===h&&s.chipTxtOn]}>{fmtH(h)}</Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
                 )}
               </View>
-              {est.wasRaised && (
-                <Text style={s.estNote}>Raised to the {minHours}h minimum for this service.</Text>
-              )}
-              <TouchableOpacity onPress={()=>setManualHours(manualHours===null ? est.hours : null)}>
-                <Text style={s.adjustTxt}>
-                  {manualHours===null ? 'Adjust the hours myself' : 'Use our estimate'}
-                </Text>
-              </TouchableOpacity>
-              {manualHours !== null && (
-                <View style={s.chips}>
-                  {[2,2.5,3,3.5,4,5,6,7,8].filter(h=>h>=minHours).map(h=>(
-                    <TouchableOpacity key={h} style={[s.chip, hours===h&&s.chipOn]}
-                      onPress={()=>setManualHours(h)}>
-                      <Text style={[s.chipTxt, hours===h&&s.chipTxtOn]}>{fmtH(h)}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
+            )}
 
             <Text style={s.lbl}>Pick a day</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}
@@ -592,22 +787,13 @@ export default function BookingScreen() {
             {date ? (
               <>
                 <Text style={s.lbl}>Start time</Text>
-                <Text style={s.hint}>
-                  The job runs about {fmtH(hours)}, so it would finish around{' '}
-                  {time ? (() => {
-                    const [h,m] = time.split(':').map(Number);
-                    const end = new Date(); end.setHours(h, m + hours*60, 0, 0);
-                    return end.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-                  })() : '—'}.
-                </Text>
                 <View style={s.chips}>
                   {TIMES.map(ti=>{
                     const ok = slotAvailable(date, ti);
                     return (
                       <TouchableOpacity key={ti}
                         style={[s.chip, time===ti&&s.chipOn, !ok&&s.chipOff]}
-                        disabled={!ok}
-                        onPress={()=>setTime(ti)}>
+                        disabled={!ok} onPress={()=>setTime(ti)}>
                         <Text style={[s.chipTxt, time===ti&&s.chipTxtOn, !ok&&s.chipTxtOff]}>{ti}</Text>
                       </TouchableOpacity>
                     );
@@ -627,38 +813,44 @@ export default function BookingScreen() {
           </View>
         )}
 
-        {/* ── 5 · CONFIRM ── */}
-        {step===5 && cleaner && (
+        {/* ══ CONFIRM ══ */}
+        {stepName === 'Confirm' && cleaner && svcType && (
           <View style={s.step}>
             <Text style={s.confirmTitle}>Booking Summary</Text>
 
             <View style={s.cleanerCard}>
-              <Avatar photoUrl={(cleaner as any).photoUrl} initials={cleaner.initials} color={cleaner.color} size={52} />
+              <Avatar photoUrl={(cleaner as any).photoUrl} initials={cleaner.initials}
+                color={cleaner.color} size={52} />
               <View style={{flex:1}}>
                 <Text style={s.cleanerName}>{cleaner.name}</Text>
-                <Text style={s.cleanerSub}>€{baseRate}/hr base · {cleaner.areas?.[0]||'Malta'}</Text>
+                <Text style={s.cleanerSub}>
+                  {isFixed ? 'Fixed price' : `€${baseRate}/hr base`} · {cleaner.areas?.[0]||'Malta'}
+                </Text>
               </View>
             </View>
 
             <View style={s.summCard}>
               {[
-                ['Service',   `${svcType?.icon || ''} ${svcType?.name || ''}`],
-                ['Property',  `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`],
-                ['Address',   address || '—'],
-                ['Date',      date ? new Date(date+'T00:00:00').toLocaleDateString('en-GB',
-                                {weekday:'long', day:'numeric', month:'long'}) : '—'],
-                ['Time',      time || '—'],
-                ['Duration',  `${fmtH(hours)} × ${num} cleaner${num>1?'s':''}`],
-                ['Materials', suppliesByCleaner ? 'Cleaner brings them' : 'Client provides'],
+                ['Service',  `${svcType.icon || ''} ${svcType.name || ''}`],
+                ...(isFixed ? [] : [['Property', `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`]]),
+                ['Address',  address || '—'],
+                ['Date',     date ? new Date(date+'T00:00:00').toLocaleDateString('en-GB',
+                               {weekday:'long', day:'numeric', month:'long'}) : '—'],
+                ['Time',     time || '—'],
+                ['On site',  isFixed
+                               ? `about ${fmtM(Number(svcType.typical_minutes) || 60)}`
+                               : `${fmtH(hours)} × ${num} ${num===1?'person':'people'}`],
+                ...(isFixed ? [] : [['Materials', suppliesByCleaner ? 'Provider brings them' : 'Client provides']]),
+                ...(isFixed && notes ? [['Your note', notes]] : []),
               ].map(([l,v])=>(
-                <View key={l} style={s.summRow}>
+                <View key={String(l)} style={s.summRow}>
                   <Text style={s.summLbl}>{l}</Text>
                   <Text style={s.summVal}>{v}</Text>
                 </View>
               ))}
             </View>
 
-            {selectedExtras.length > 0 && (
+            {!isFixed && selectedExtras.length > 0 && (
               <View style={s.summCard}>
                 <Text style={s.summHead}>Extras included</Text>
                 {selectedExtras.map(e=>(
@@ -670,44 +862,112 @@ export default function BookingScreen() {
               </View>
             )}
 
+            {isQuote ? (
+              <View style={s.quoteCard}>
+                <Text style={s.quoteTitle}>💬  Price comes next</Text>
+                <Text style={s.quoteTxt}>
+                  {cleaner.name.split(' ')[0]} will message you to understand the job,
+                  then send a price. You accept or decline before anyone travels —
+                  there's no charge either way.
+                </Text>
+                {myEff?.priceMin && myEff?.priceMax && (
+                  <Text style={s.quoteRange}>
+                    They usually charge between €{myEff.priceMin} and €{myEff.priceMax}.
+                  </Text>
+                )}
+              </View>
+            ) : (
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Price breakdown</Text>
-              {[
-                ['Base rate', `€${baseRate.toFixed(2)}/hr`],
-                [`${svcType?.name} rate  ×${multiplier}`, `€${(baseRate*multiplier).toFixed(2)}/hr`],
-                ...(suppliesByCleaner ? [['Materials surcharge', '+€2.00/hr']] : []),
-                [`${fmtH(hours)} × ${num} cleaner${num>1?'s':''}`, `€${p.exVat.toFixed(2)}`],
-                ['VAT 18% (agency)', `€${p.vat.toFixed(2)}`],
-                ['Stripe fee', `€${p.stripeFee.toFixed(2)}`],
-                ['──────────────', '──────'],
-                ['Cleaner gets (80%)', `€${p.cleanerGets.toFixed(2)}`],
-                ['Platform (20%)', `€${p.platform.toFixed(2)}`],
-              ].map(([l,v])=>(
-                <View key={String(l)} style={s.priceRow}>
-                  <Text style={s.priceLbl}>{l}</Text>
-                  <Text style={s.priceVal}>{v}</Text>
-                </View>
-              ))}
-              <View style={s.totalRow}>
-                <Text style={s.totalLbl}>Estimated total</Text>
-                <Text style={s.totalVal}>€{p.clientPays.toFixed(2)}</Text>
-              </View>
-            </View>
 
-            <TouchableOpacity style={s.scopeBtn} onPress={()=>openTasks(svc)}>
-              <Text style={s.scopeBtnTxt}>📋  See the full task list for this clean</Text>
-            </TouchableOpacity>
+              {isFixed ? (
+                <>
+                  {[
+                    ['Service charge', `€${flatQuote.labour.toFixed(2)}`],
+                    ...(flatQuote.callout > 0 ? [['Callout', `€${flatQuote.callout.toFixed(2)}`]] : []),
+                    ...(flatQuote.parts > 0
+                      ? [[svcType.parts_label || 'Parts', `€${flatQuote.parts.toFixed(2)}`]] : []),
+                    ['VAT 18%',   `€${flatQuote.vat.toFixed(2)}`],
+                    ['Card fee',  `€${flatQuote.stripeFee.toFixed(2)}`],
+                  ].map(([l,v])=>(
+                    <View key={String(l)} style={s.priceRow}>
+                      <Text style={s.priceLbl}>{l}</Text>
+                      <Text style={s.priceVal}>{v}</Text>
+                    </View>
+                  ))}
+                  <View style={s.totalRow}>
+                    <Text style={s.totalLbl}>Total</Text>
+                    <Text style={s.totalVal}>€{flatQuote.clientPays.toFixed(2)}</Text>
+                  </View>
+                </>
+              ) : (
+                <>
+                  {[
+                    ['Base rate', `€${baseRate.toFixed(2)}/hr`],
+                    [`${svcType.name} rate  ×${multiplier}`, `€${(baseRate*multiplier).toFixed(2)}/hr`],
+                    ...(suppliesByCleaner ? [['Materials surcharge', '+€2.00/hr']] : []),
+                    [`${fmtH(hours)} × ${num}`, `€${hourlyQuote.exVat.toFixed(2)}`],
+                    ['VAT 18% (agency)', `€${hourlyQuote.vat.toFixed(2)}`],
+                    ['Card fee', `€${hourlyQuote.stripeFee.toFixed(2)}`],
+                  ].map(([l,v])=>(
+                    <View key={String(l)} style={s.priceRow}>
+                      <Text style={s.priceLbl}>{l}</Text>
+                      <Text style={s.priceVal}>{v}</Text>
+                    </View>
+                  ))}
+                  <View style={s.totalRow}>
+                    <Text style={s.totalLbl}>Estimated total</Text>
+                    <Text style={s.totalVal}>€{hourlyQuote.clientPays.toFixed(2)}</Text>
+                  </View>
+                </>
+              )}
+            </View>
+            )}
+
+            {hasTasks[svc] && (
+              <TouchableOpacity style={s.scopeBtn} onPress={()=>openTasks(svc)}>
+                <Text style={s.scopeBtnTxt}>📋  See the full task list</Text>
+              </TouchableOpacity>
+            )}
 
             <View style={s.finalBox}>
-              <Text style={s.finalTitle}>💡  How the final price is set</Text>
-              <Text style={s.finalTxt}>
-                This is an estimate based on {fmtH(hours)}. Your cleaner starts the timer
-                with your PIN and stops it when the work is done.
+              <Text style={s.finalTitle}>
+                {isQuote ? '💬  Nothing is agreed yet'
+                  : isFixed ? '🔒  This price is fixed'
+                  : '💡  How the final price is set'}
               </Text>
-              <Text style={s.finalTxt}>
-                You pay for the time actually worked — less if it finishes early.
-                Your card is only charged once you've approved the completed checklist.
-              </Text>
+              {isQuote ? (
+                <>
+                  <Text style={s.finalTxt}>
+                    Sending this opens a conversation. Describe the job, answer their
+                    questions, and they'll quote you.
+                  </Text>
+                  <Text style={s.finalTxt}>
+                    You're free to decline. The job is cancelled and nothing is charged.
+                  </Text>
+                </>
+              ) : isFixed ? (
+                <>
+                  <Text style={s.finalTxt}>
+                    No timer, no hourly rate. If the job needs parts beyond what's
+                    listed, your provider quotes you separately and you decide before
+                    they carry on.
+                  </Text>
+                  <Text style={s.finalTxt}>
+                    Nothing is charged until the work is done and you confirm it.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={s.finalTxt}>
+                    This is an estimate based on {fmtH(hours)}. Your provider starts the
+                    timer with your PIN and stops it when the work is done.
+                  </Text>
+                  <Text style={s.finalTxt}>
+                    You pay for the time actually worked — less if it finishes early.
+                  </Text>
+                </>
+              )}
             </View>
           </View>
         )}
@@ -717,13 +977,25 @@ export default function BookingScreen() {
 
       <View style={s.footer}>
         <View style={{flex:1}}>
-          {step >= 3 && cleaner ? (
+          {isQuote ? (
             <>
-              <Text style={s.footerLbl}>{fmtH(hours)} · Estimated</Text>
-              <Text style={s.footerVal}>€{p.clientPays.toFixed(2)}</Text>
+              <Text style={s.footerLbl}>Price</Text>
+              <Text style={s.footerQuote}>After you talk</Text>
+            </>
+          ) : (stepName === 'Provider' || stepName === 'When' || stepName === 'Confirm') && cleaner ? (
+            <>
+              <Text style={s.footerLbl}>
+                {isFixed ? 'Fixed price' : `${fmtH(hours)} · Estimated`}
+              </Text>
+              <Text style={s.footerVal}>€{total.toFixed(2)}</Text>
+            </>
+          ) : isFixed && svcType ? (
+            <>
+              <Text style={s.footerLbl}>Fixed price</Text>
+              <Text style={s.footerVal}>€{flatQuote.clientPays.toFixed(2)}</Text>
             </>
           ) : (
-            <Text style={s.footerStep}>{STEPS[step]}</Text>
+            <Text style={s.footerStep}>{stepName}</Text>
           )}
         </View>
         <TouchableOpacity
@@ -734,9 +1006,9 @@ export default function BookingScreen() {
           {loading ? <ActivityIndicator color={C.white}/> :
             <Text style={s.nextBtnTxt}>
               {!canContinue ? blockedMsg
-                : step===2 && chosenExtras.length===0 ? 'Skip  →'
+                : stepName === 'Extras' && chosenExtras.length===0 ? 'Skip  →'
                 : step<STEPS.length-1 ? 'Continue  →'
-                : '✓  Confirm & Pay'}
+                : isQuote ? '💬  Send request' : '✓  Confirm & Pay'}
             </Text>}
         </TouchableOpacity>
       </View>
@@ -755,7 +1027,7 @@ export default function BookingScreen() {
             </View>
             <ScrollView style={s.modalBody}>
               <Text style={s.modalIntro}>
-                Your cleaner ticks each of these off when the job is done. You see the
+                Your provider ticks each of these off when the job is done. You see the
                 completed list before approving.
               </Text>
               {Object.entries(taskGroups).map(([area, tasks])=>(
@@ -801,6 +1073,7 @@ const s = StyleSheet.create({
   loadingBox:{paddingVertical:30,alignItems:'center'},
   lbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginTop:24,marginBottom:8},
   hint:{fontSize:13,color:C.muted,marginBottom:12,lineHeight:18},
+  note:{fontSize:12,color:C.muted,marginTop:8,lineHeight:17},
   input:{backgroundColor:C.white,borderRadius:14,paddingHorizontal:16,paddingVertical:14,fontSize:15,color:C.text,borderWidth:1.5,borderColor:C.border},
   chips:{flexDirection:'row',flexWrap:'wrap',gap:8},
   chip:{paddingHorizontal:16,paddingVertical:11,borderRadius:12,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border,alignItems:'center'},
@@ -812,18 +1085,26 @@ const s = StyleSheet.create({
   chipSub:{fontSize:10,color:C.muted,marginTop:2},
   teamNote:{fontSize:12,color:C.accent,fontWeight:'700',marginTop:10,lineHeight:17},
 
-  noSvcBox:{backgroundColor:C.white,borderRadius:16,padding:26,alignItems:'center',gap:8,borderWidth:1,borderColor:C.border},
-  noSvcIcon:{fontSize:38},
-  noSvcTitle:{fontSize:16,fontWeight:'800',color:C.dark},
-  noSvcTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
   svcCard:{padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10},
   svcCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
   svcTop:{flexDirection:'row',gap:12,alignItems:'flex-start'},
   svcIcon:{fontSize:26},
   svcName:{fontSize:15,fontWeight:'700',color:C.dark},
   svcDesc:{fontSize:12,color:C.muted,marginTop:3,lineHeight:17},
+  svcBreak:{marginTop:7},
+  svcBreakRow:{fontSize:12,color:C.text,fontWeight:'600'},
+  svcBreakSub:{fontSize:11,color:C.muted,marginTop:2},
+  svcPrice:{fontSize:20,fontWeight:'800',color:C.dark},
+  svcRange:{fontSize:15,fontWeight:'800',color:C.dark},
+  svcPriceSub:{fontSize:10,color:C.muted},
   svcFoot:{marginTop:10,paddingTop:10,borderTopWidth:1,borderTopColor:C.bg},
   svcLink:{fontSize:12,color:C.primary,fontWeight:'700'},
+  fixedNote:{backgroundColor:C.amberLt,borderRadius:14,padding:14,marginTop:6,borderWidth:1,borderColor:'#FDE68A'},
+  fixedNoteTxt:{fontSize:12,color:C.text,lineHeight:18},
+  noSvcBox:{backgroundColor:C.white,borderRadius:16,padding:26,alignItems:'center',gap:8,borderWidth:1,borderColor:C.border},
+  noSvcIcon:{fontSize:38},
+  noSvcTitle:{fontSize:16,fontWeight:'800',color:C.dark},
+  noSvcTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
 
   supplyRow:{flexDirection:'row',gap:10},
   supplyCard:{flex:1,padding:14,borderRadius:14,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white},
@@ -862,10 +1143,14 @@ const s = StyleSheet.create({
   addrLocality:{fontSize:12,color:C.muted,marginTop:1},
   addrHint:{fontSize:12,color:C.muted,marginTop:3},
 
+  lockBanner:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:8,marginTop:8,marginBottom:4,borderWidth:1,borderColor:C.border},
+  lockTxt:{fontSize:13,color:C.text,lineHeight:19},
+  lockLink:{fontSize:12,color:C.primary,fontWeight:'700'},
+
   clCard:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10,...S.sm},
   clCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt,borderWidth:2},
-  clAv:{width:50,height:50,borderRadius:25,alignItems:'center',justifyContent:'center'},
-  clIn:{fontSize:17,fontWeight:'800'},
+  clCardOff:{opacity:0.42},
+  clBusy:{fontSize:11,color:C.amber,fontWeight:'700',marginTop:3},
   clNameRow:{flexDirection:'row',alignItems:'center',gap:8},
   clName:{fontSize:15,fontWeight:'700',color:C.dark},
   verBadge:{backgroundColor:C.greenLt,width:19,height:19,borderRadius:10,alignItems:'center',justifyContent:'center'},
@@ -874,17 +1159,15 @@ const s = StyleSheet.create({
   clMeta:{fontSize:12,color:C.muted,marginTop:3},
   clAreas:{fontSize:11,color:C.muted,marginTop:2},
   clTotal:{fontSize:20,fontWeight:'800',color:C.dark},
+  clRange:{fontSize:15,fontWeight:'800',color:C.dark},
   clHours:{fontSize:11,color:C.muted,marginTop:1},
 
-  lockBanner:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:8,marginTop:8,marginBottom:4,borderWidth:1,borderColor:C.border},
-  lockTxt:{fontSize:13,color:C.text,lineHeight:19},
-  lockLink:{fontSize:12,color:C.primary,fontWeight:'700'},
-  emptyBtn:{marginTop:10,backgroundColor:C.primary,borderRadius:12,paddingVertical:11,paddingHorizontal:20},
-  emptyBtnTxt:{color:C.white,fontSize:13,fontWeight:'700'},
   emptyBox:{backgroundColor:C.white,borderRadius:16,padding:28,alignItems:'center',borderWidth:1,borderColor:C.border,gap:6},
   emptyIcon:{fontSize:38},
   emptyTxt:{fontSize:15,fontWeight:'700',color:C.dark},
   emptySub:{fontSize:13,color:C.muted,textAlign:'center'},
+  emptyBtn:{marginTop:10,backgroundColor:C.primary,borderRadius:12,paddingVertical:11,paddingHorizontal:20},
+  emptyBtnTxt:{color:C.white,fontSize:13,fontWeight:'700'},
 
   estBox:{backgroundColor:C.primaryLt,borderRadius:16,padding:16,marginTop:8,borderWidth:1,borderColor:C.border,gap:10},
   estTitle:{fontSize:17,fontWeight:'800',color:C.primary},
@@ -908,16 +1191,9 @@ const s = StyleSheet.create({
   pickDayBox:{backgroundColor:C.bgAlt,borderRadius:12,padding:16,marginTop:20,borderWidth:1,borderColor:C.border},
   pickDayTxt:{fontSize:13,color:C.muted,textAlign:'center'},
   leadNote:{fontSize:11,color:C.amber,fontWeight:'700',marginTop:10},
-  dateBtn:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingVertical:13,paddingHorizontal:16,borderRadius:12,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:8},
-  dateBtnOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
-  dateTxt:{fontSize:14,fontWeight:'600',color:C.muted},
-  dateTxtOn:{color:C.primary},
-  dateTick:{fontSize:16,color:C.primary,fontWeight:'700'},
 
   confirmTitle:{fontSize:22,fontWeight:'800',color:C.dark,marginBottom:16,marginTop:8},
   cleanerCard:{flexDirection:'row',alignItems:'center',gap:14,backgroundColor:C.white,borderRadius:16,padding:14,marginBottom:14,borderWidth:1,borderColor:C.border},
-  cleanerAv:{width:52,height:52,borderRadius:26,alignItems:'center',justifyContent:'center'},
-  cleanerIn:{fontSize:18,fontWeight:'800'},
   cleanerName:{fontSize:15,fontWeight:'700',color:C.dark},
   cleanerSub:{fontSize:12,color:C.muted,marginTop:3},
   summCard:{backgroundColor:C.white,borderRadius:16,padding:16,marginBottom:14,...S.sm,borderWidth:1,borderColor:C.border},
@@ -943,6 +1219,12 @@ const s = StyleSheet.create({
   footerLbl:{fontSize:11,color:C.muted},
   footerVal:{fontSize:20,fontWeight:'800',color:C.dark},
   footerStep:{fontSize:13,color:C.muted,fontWeight:'600'},
+  footerQuote:{fontSize:16,fontWeight:'800',color:C.teal},
+  quoteCard:{backgroundColor:C.tealLt,borderRadius:16,padding:16,gap:8,marginBottom:14,
+    borderWidth:1,borderColor:'#BAE6FD'},
+  quoteTitle:{fontSize:15,fontWeight:'800',color:C.teal},
+  quoteTxt:{fontSize:13,color:C.text,lineHeight:19},
+  quoteRange:{fontSize:13,color:C.teal,fontWeight:'700'},
   nextBtn:{flex:1.6,backgroundColor:C.primary,borderRadius:14,paddingVertical:16,alignItems:'center',...S.md},
   nextBtnDis:{backgroundColor:C.muted},
   nextBtnTxt:{color:C.white,fontSize:15,fontWeight:'700'},

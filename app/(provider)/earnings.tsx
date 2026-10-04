@@ -1,5 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { router } from 'expo-router';
+import { supabase } from '../../lib/supabase';
 import { C, S } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
 import { fmtDuration } from '../../lib/services';
@@ -23,6 +25,17 @@ export default function Earnings() {
   const { bookings, loadBookings } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState('month');
+  const [hasBank, setHasBank] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const { data:{ user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase.from('cleaner_profiles')
+        .select('iban').eq('id', user.id).maybeSingle();
+      setHasBank(!!(data?.iban && data.iban.length > 10));
+    })();
+  }, []);
 
   const onRefresh = async () => { setRefreshing(true); await loadBookings(); setRefreshing(false); };
 
@@ -84,6 +97,19 @@ export default function Earnings() {
           {stats.jobs} job{stats.jobs===1?'':'s'} · {fmtDuration(stats.minutes)} worked
         </Text>
       </View>
+
+      {!hasBank && (stats.earned > 0 || stats.waiting > 0) && (
+        <TouchableOpacity style={s.bankCard} onPress={()=>router.push('/payout')}>
+          <Text style={s.bankIcon}>🏦</Text>
+          <View style={{flex:1}}>
+            <Text style={s.bankTitle}>Add your bank details</Text>
+            <Text style={s.bankTxt}>
+              You've earned money but we have nowhere to send it. Takes a minute.
+            </Text>
+          </View>
+          <Text style={s.bankGo}>›</Text>
+        </TouchableOpacity>
+      )}
 
       {stats.pendingCount > 0 && (
         <View style={s.waitCard}>
@@ -165,6 +191,12 @@ const s = StyleSheet.create({
   heroLbl:{fontSize:13,color:'#C7D2FE',fontWeight:'600'},
   heroVal:{fontSize:40,fontWeight:'800',color:C.white},
   heroSub:{fontSize:12,color:'#A5B4FC'},
+  bankCard:{flexDirection:'row',alignItems:'center',gap:12,marginHorizontal:20,marginTop:12,
+    backgroundColor:C.primaryLt,borderRadius:16,padding:14,borderWidth:1.5,borderColor:C.primary},
+  bankIcon:{fontSize:22},
+  bankTitle:{fontSize:15,fontWeight:'800',color:C.primary},
+  bankTxt:{fontSize:12,color:C.text,marginTop:3,lineHeight:17},
+  bankGo:{fontSize:22,color:C.primary},
   waitCard:{flexDirection:'row',gap:12,marginHorizontal:20,marginTop:12,backgroundColor:C.amberLt,borderRadius:16,padding:14,borderWidth:1,borderColor:'#FDE68A'},
   waitIcon:{fontSize:22},
   waitTitle:{fontSize:15,fontWeight:'800',color:C.amber},
