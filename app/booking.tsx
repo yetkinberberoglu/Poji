@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
 import { useApp } from '../context/AppContext';
 import Avatar from '../components/Avatar';
+import { canTakeJob } from '../lib/availability';
 import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
@@ -497,8 +498,15 @@ export default function BookingScreen() {
             ) : capable.map(c=>{
               const on = pickedCleaner === c.id;
               const q  = quoteFor(c as any);
+              const free = (!date || !time) ? { ok:true } : canTakeJob({
+                availability: (c as any).availability,
+                notice_hours: (c as any).noticeHours,
+                timeOff: (c as any).timeOff,
+              }, date, time);
               return (
-                <TouchableOpacity key={c.id} style={[s.clCard, on&&s.clCardOn]}
+                <TouchableOpacity key={c.id}
+                  style={[s.clCard, on&&s.clCardOn, !free.ok&&s.clCardOff]}
+                  disabled={!free.ok}
                   onPress={()=>setPicked(c.id)}>
                   <Avatar photoUrl={(c as any).photoUrl} initials={c.initials} color={c.color} size={50} />
                   <View style={{flex:1}}>
@@ -511,6 +519,13 @@ export default function BookingScreen() {
                       ⭐ {c.rating} · €{c.rate}/hr · {teamSizeOf(c)===1 ? 'solo' : `team of ${teamSizeOf(c)}`}
                     </Text>
                     <Text style={s.clAreas}>{c.areas.slice(0,3).join(' · ')}</Text>
+                    {!free.ok && (
+                      <Text style={s.clBusy}>
+                        {(free as any).reason === 'away' ? 'Away on that date'
+                          : (free as any).reason === 'short_notice' ? 'Needs more notice'
+                          : "Doesn't work that slot"}
+                      </Text>
+                    )}
                   </View>
                   <View style={{alignItems:'flex-end'}}>
                     <Text style={[s.clTotal, on&&{color:C.primary}]}>€{q.total.toFixed(0)}</Text>
@@ -864,6 +879,8 @@ const s = StyleSheet.create({
 
   clCard:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10,...S.sm},
   clCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt,borderWidth:2},
+  clCardOff:{opacity:0.42},
+  clBusy:{fontSize:11,color:C.amber,fontWeight:'700',marginTop:3},
   clAv:{width:50,height:50,borderRadius:25,alignItems:'center',justifyContent:'center'},
   clIn:{fontSize:17,fontWeight:'800'},
   clNameRow:{flexDirection:'row',alignItems:'center',gap:8},
