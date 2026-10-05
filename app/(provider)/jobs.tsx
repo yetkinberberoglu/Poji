@@ -425,6 +425,17 @@ export default function ProviderScreen() {
                 </View>
               )}
 
+              {b.answers && Object.keys(b.answers).length > 0 && (
+                <View style={s0.answerBox}>
+                  <Text style={s0.answerTitle}>📝  What they told us</Text>
+                  {Object.entries(b.answers as Record<string,string>).map(([k,v])=>(
+                    <View key={k} style={s0.answerRow}>
+                      <Text style={s0.answerVal}>{v}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
               {b.numCleaners > 1 && (
                 <View style={s0.teamBanner}>
                   <Text style={s0.teamBannerTxt}>
@@ -873,6 +884,11 @@ const s0 = StyleSheet.create({
   infoItem:{flexDirection:'row',alignItems:'center',gap:6,backgroundColor:C.bg,paddingHorizontal:10,paddingVertical:6,borderRadius:10},
   infoIcon:{fontSize:14},
   infoTxt:{fontSize:13,color:C.text,fontWeight:'600'},
+  answerBox:{backgroundColor:C.primaryLt,borderRadius:12,padding:13,gap:5,
+    borderWidth:1,borderColor:C.border},
+  answerTitle:{fontSize:13,fontWeight:'800',color:C.primary},
+  answerRow:{flexDirection:'row'},
+  answerVal:{fontSize:13,color:C.text,lineHeight:19},
   roadBox:{backgroundColor:C.amberLt,borderRadius:14,padding:14,gap:10,borderWidth:1,borderColor:'#FDE68A'},
   roadHead:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},
   roadTitle:{fontSize:14,fontWeight:'800',color:C.amber},

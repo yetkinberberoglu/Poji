@@ -47,6 +47,7 @@ export interface Booking {
   locationNote?: string | null;
   vehicleInfo?: string | null;
   tradeId?: string | null;
+  answers?: Record<string,string> | null;
   labourTotal?: number | null;
   quoteAmount?: number | null;
   quoteParts?: number | null;
@@ -83,7 +84,8 @@ interface Ctx {
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
              releasedToPool?: boolean; tradeId?: string|null;
-             labourTotal?: number|null; partsTotal?: number|null }
+             labourTotal?: number|null; partsTotal?: number|null;
+             answers?: Record<string,string> }
   ) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   markArrived: (id: string) => Promise<string>;
@@ -285,6 +287,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         locationNote: b.location_note,
         vehicleInfo: b.vehicle_info,
         tradeId: b.trade_id,
+        answers: b.answers,
         labourTotal: b.labour_total,
         quoteAmount: b.quote_amount,
         quoteParts: b.quote_parts,
@@ -362,7 +365,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
              releasedToPool?: boolean; tradeId?: string|null;
-             labourTotal?: number|null; partsTotal?: number|null }
+             labourTotal?: number|null; partsTotal?: number|null;
+             answers?: Record<string,string> }
   ) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
@@ -401,6 +405,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       location_note: meta?.locationNote ?? null,
       vehicle_info: meta?.vehicleInfo ?? null,
       trade_id: meta?.tradeId ?? null,
+      answers: meta?.answers && Object.keys(meta.answers).length ? meta.answers : null,
       labour_total: meta?.labourTotal ?? null,
       parts_total: meta?.partsTotal ?? 0,
       preferred_cleaner_id: b.cleanerId || null,
@@ -433,9 +438,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       } else
       // Tell the preferred cleaner they have a 5-minute priority window
       notify(b.cleanerId, 'new_job_offer', {
-        address: b.address, date: b.date, time: b.time,
-        hours: b.hours, numCleaners: b.numCleaners, serviceType: b.serviceType,
-        earnings: (b.total / 1.029 / 1.18 * 0.80),
+        address: b.address,
+        date: b.date,
+        time: b.time,
+        hours: b.hours,
+        model: meta?.pricingModel || 'hourly',
+        earnings: meta?.pricingModel === 'quote'
+          ? null
+          : (b.total / 1.029 / 1.18 * 0.80),
       }, data.id);
 
       setBookings(prev => [{

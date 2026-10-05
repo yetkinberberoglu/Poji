@@ -8,11 +8,12 @@ import { C, S } from '../constants/theme';
 import { useApp } from '../context/AppContext';
 import Avatar from '../components/Avatar';
 import { canTakeJob } from '../lib/availability';
+import ServiceQuestions from '../components/ServiceQuestions';
 import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
   groupTasks, quote, fixedQuote, estimateHours,
-  loadServicePrices, effectiveService,
+  loadServicePrices, effectiveService, missingAnswers,
   type ServiceType, type ServiceExtra, type PropertySize, type ProviderService
 } from '../lib/services';
 
@@ -82,6 +83,7 @@ export default function BookingScreen() {
   const [size, setSize]           = useState('1bed');
   const [address, setAddr]        = useState('');
   const [notes, setNotes]         = useState('');
+  const [answers, setAnswers]     = useState<Record<string,string>>({});
   const [savedAddr, setSavedAddr] = useState<{line:string; locality:string}|null>(null);
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
@@ -242,6 +244,8 @@ export default function BookingScreen() {
     loadServicePrices(svc).then(setPrices);
   }, [svc]);
 
+  useEffect(() => { setAnswers({}); }, [svc]);
+
   useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
   useEffect(() => { if (date && time && !slotAvailable(date, time)) setTime(''); }, [date]);
   useEffect(() => {
@@ -291,6 +295,7 @@ export default function BookingScreen() {
         labourTotal: isFixed ? flatQuote.labourSide : null,
         partsTotal:  isFixed ? flatQuote.parts : 0,
         locationNote: notes.trim() || null,
+        answers,
       });
 
       setPlaced({
@@ -309,17 +314,21 @@ export default function BookingScreen() {
     finally { setLoad(false); }
   };
 
+  const qs = (svcType?.questions || []) as any[];
+  const unanswered = missingAnswers(qs, answers);
+
   const canContinue =
     stepName === 'Service'  ? !!svc :
-    stepName === 'Place'    ? !!address :
-    stepName === 'Address'  ? !!address :
+    stepName === 'Place'    ? !!address && unanswered.length === 0 :
+    stepName === 'Address'  ? !!address && unanswered.length === 0 :
     stepName === 'Provider' ? !!pickedCleaner :
     stepName === 'When'     ? !!date && !!time :
     true;
 
   const blockedMsg =
     stepName === 'Service'  ? 'Pick a service' :
-    (stepName === 'Place' || stepName === 'Address') ? 'Enter an address first' :
+    (stepName === 'Place' || stepName === 'Address')
+      ? (!address ? 'Enter an address first' : 'Answer the questions above') :
     stepName === 'Provider' ? 'Pick a provider to continue' :
     stepName === 'When'     ? 'Pick a date and time' : '';
 
@@ -620,6 +629,14 @@ export default function BookingScreen() {
 
             <Text style={s.lbl}>Where should we come?</Text>
             {AddressBlock}
+
+            {qs.length > 0 && (
+              <>
+                <Text style={s.lbl}>A few details</Text>
+                <ServiceQuestions questions={qs} answers={answers}
+                  onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+              </>
+            )}
           </View>
         )}
 
@@ -632,7 +649,12 @@ export default function BookingScreen() {
             </Text>
             {AddressBlock}
 
-            <Text style={s.lbl}>Anything they should know?</Text>
+            {qs.length > 0 && (
+              <ServiceQuestions questions={qs} answers={answers}
+                onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+            )}
+
+            <Text style={s.lbl}>Anything else they should know?</Text>
             <TextInput style={[s.input,{minHeight:90}]} value={notes} onChangeText={setNotes}
               placeholder={
                 svcType?.trade_id === 'water'
@@ -950,7 +972,8 @@ export default function BookingScreen() {
                                ? `about ${fmtM(Number(svcType.typical_minutes) || 60)}`
                                : `${fmtH(hours)} × ${num} ${num===1?'person':'people'}`],
                 ...(isFixed ? [] : [['Materials', suppliesByCleaner ? 'Provider brings them' : 'Client provides']]),
-                ...(isFixed && notes ? [['Your note', notes]] : []),
+                ...qs.filter((q:any)=>answers[q.id]).map((q:any)=>[q.label, answers[q.id]]),
+                ...(notes ? [['Your note', notes]] : []),
               ].map(([l,v])=>(
                 <View key={String(l)} style={s.summRow}>
                   <Text style={s.summLbl}>{l}</Text>

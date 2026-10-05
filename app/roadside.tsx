@@ -10,6 +10,8 @@ import { supabase } from '../lib/supabase';
 import { loadServiceTypes, fixedQuote, type ServiceType } from '../lib/services';
 import { findTrade } from '../constants/trades';
 import { getCurrentLocation, reverseGeocode, mapsLink, type Coords } from '../lib/location';
+import ServiceQuestions from '../components/ServiceQuestions';
+import { missingAnswers } from '../lib/services';
 
 const STEPS = ['Problem','Location','Vehicle','Confirm'];
 
@@ -32,11 +34,16 @@ export default function Roadside() {
   const [locDenied, setDenied]= useState(false);
   const [manualAddr, setManual] = useState('');
   const [vehicle, setVehicle] = useState('');
+  const [answers, setAnswers] = useState<Record<string,string>>({});
 
   const type = types.find(t => t.id === svc) || null;
+  const isQuoteJob = type?.pricing_model === 'quote';
+  const qs = (type?.questions || []) as any[];
+  const unanswered = missingAnswers(qs, answers);
   const p = type ? fixedQuote({
-    fixedPrice: Number(type.fixed_price) || 0,
-    calloutFee: Number(type.callout_fee) || 0,
+    labourPrice: Number(type.labour_price ?? type.fixed_price) || 0,
+    partsPrice:  Number(type.parts_price) || 0,
+    calloutFee:  Number(type.callout_fee) || 0,
     urgent,
   }) : null;
 
@@ -86,7 +93,7 @@ export default function Roadside() {
         numCleaners: 1,
         propertyType: 'vehicle',
         serviceType: type.id,
-        total: p?.clientPays || 0,
+        total: isQuoteJob ? 0 : (p?.clientPays || 0),
         status: 'pending_pool',
       } as any, {
         multiplier: 1,
@@ -97,7 +104,7 @@ export default function Roadside() {
         tradeId: type.trade_id || trade || null,
         estimatedMinutes: Number(type.typical_minutes) || 30,
         extrasForChecklist: [],
-        pricingModel: 'fixed',
+        pricingModel: isQuoteJob ? 'quote' : 'fixed',
         calloutFee: Number(type.callout_fee) || 0,
         isUrgent: urgent,
         lat: coords?.lat ?? null,
@@ -105,6 +112,7 @@ export default function Roadside() {
         locationAccuracy: coords?.accuracy ?? null,
         locationNote: locNote || null,
         vehicleInfo: vehicle || null,
+        answers,
         releasedToPool: true,
       });
       Alert.alert(
@@ -120,6 +128,7 @@ export default function Roadside() {
   const canContinue =
     step === 0 ? !!svc :
     step === 1 ? !!coords || !!manualAddr :
+    step === 2 ? unanswered.length === 0 :
     true;
 
   return (
@@ -170,9 +179,11 @@ export default function Roadside() {
               </View>
             ) : types.map(t=>{
               const on = svc === t.id;
+              const byQuote = t.pricing_model === 'quote';
               const q  = fixedQuote({
-                fixedPrice: Number(t.fixed_price)||0,
-                calloutFee: Number(t.callout_fee)||0,
+                labourPrice: Number(t.labour_price ?? t.fixed_price) || 0,
+                partsPrice:  Number(t.parts_price) || 0,
+                calloutFee:  Number(t.callout_fee) || 0,
                 urgent,
               });
               return (
@@ -184,8 +195,19 @@ export default function Roadside() {
                     <Text style={s.cardTime}>Usually about {t.typical_minutes} min on site</Text>
                   </View>
                   <View style={{alignItems:'flex-end'}}>
-                    <Text style={[s.cardPrice, on&&{color:C.primary}]}>€{q.clientPays.toFixed(0)}</Text>
-                    <Text style={s.cardPriceSub}>all in</Text>
+                    {byQuote ? (
+                      <>
+                        <Text style={[s.cardPrice, on&&{color:C.primary}]}>
+                          {t.price_min && t.price_max ? `€${t.price_min}–${t.price_max}` : '—'}
+                        </Text>
+                        <Text style={s.cardPriceSub}>they quote</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={[s.cardPrice, on&&{color:C.primary}]}>€{q.clientPays.toFixed(0)}</Text>
+                        <Text style={s.cardPriceSub}>all in</Text>
+                      </>
+                    )}
                   </View>
                 </TouchableOpacity>
               );
@@ -286,6 +308,11 @@ export default function Roadside() {
             <TextInput style={s.input} value={vehicle} onChangeText={setVehicle}
               placeholder="e.g. Toyota Yaris 2018, ABC 123"
               placeholderTextColor={C.muted} />
+
+            {qs.length > 0 && (
+              <ServiceQuestions questions={qs} answers={answers}
+                onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+            )}
             <Text style={s.smallNote}>
               Optional, but it saves a phone call.
             </Text>
@@ -304,6 +331,7 @@ export default function Roadside() {
                 ['Vehicle',  vehicle || 'Not given'],
                 ['Timing',   urgent ? 'Right now' : 'Within a day'],
                 ['On site',  `about ${type.typical_minutes} min`],
+                ...qs.filter((q:any)=>answers[q.id]).map((q:any)=>[q.label, answers[q.id]]),
               ].map(([l,v])=>(
                 <View key={l} style={s.summRow}>
                   <Text style={s.summLbl}>{l}</Text>
@@ -312,6 +340,21 @@ export default function Roadside() {
               ))}
             </View>
 
+            {isQuoteJob ? (
+              <View style={s.quoteCard}>
+                <Text style={s.quoteTitle}>💬  They'll quote you</Text>
+                <Text style={s.quoteTxt}>
+                  This one depends on the vehicle and the lock, so nobody can price it
+                  blind. Send the request, answer their questions, and they'll give you
+                  a figure before anyone travels.
+                </Text>
+                {type?.price_min && type?.price_max && (
+                  <Text style={s.quoteRange}>
+                    Usually between €{type.price_min} and €{type.price_max}.
+                  </Text>
+                )}
+              </View>
+            ) : (
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Fixed price</Text>
               {[
@@ -331,6 +374,7 @@ export default function Roadside() {
                 <Text style={s.totalVal}>€{p.clientPays.toFixed(2)}</Text>
               </View>
             </View>
+            )}
 
             <View style={s.fixedNote}>
               <Text style={s.fixedTitle}>🔒  This price is fixed</Text>
@@ -351,7 +395,12 @@ export default function Roadside() {
 
       <View style={s.footer}>
         <View style={{flex:1}}>
-          {p ? (
+          {isQuoteJob ? (
+            <>
+              <Text style={s.footerLbl}>Price</Text>
+              <Text style={s.footerQuote}>After you talk</Text>
+            </>
+          ) : p ? (
             <>
               <Text style={s.footerLbl}>{urgent ? 'Right now · Fixed' : 'Fixed price'}</Text>
               <Text style={s.footerVal}>€{p.clientPays.toFixed(2)}</Text>
@@ -368,9 +417,10 @@ export default function Roadside() {
             <Text style={s.nextBtnTxt}>
               {!canContinue
                 ? (step===0 ? 'Pick a problem' : 'Share or type where you are')
-                : step===2 && !vehicle ? 'Skip  →'
+                : unanswered.length > 0 ? 'Answer the questions above'
+                : step===2 && !vehicle && qs.length === 0 ? 'Skip  →'
                 : step<STEPS.length-1 ? 'Continue  →'
-                : '🚨  Send request'}
+                : isQuoteJob ? '💬  Send request' : '🚨  Send request'}
             </Text>}
         </TouchableOpacity>
       </View>
@@ -461,6 +511,12 @@ const s = StyleSheet.create({
   footerLbl:{fontSize:11,color:C.muted},
   footerVal:{fontSize:20,fontWeight:'800',color:C.dark},
   footerStep:{fontSize:13,color:C.muted,fontWeight:'600'},
+  footerQuote:{fontSize:16,fontWeight:'800',color:C.teal},
+  quoteCard:{backgroundColor:C.tealLt,borderRadius:16,padding:16,gap:8,marginBottom:14,
+    borderWidth:1,borderColor:'#BAE6FD'},
+  quoteTitle:{fontSize:15,fontWeight:'800',color:C.teal},
+  quoteTxt:{fontSize:13,color:C.text,lineHeight:19},
+  quoteRange:{fontSize:13,color:C.teal,fontWeight:'700'},
   nextBtn:{flex:1.6,backgroundColor:C.primary,borderRadius:14,paddingVertical:16,alignItems:'center',...S.md},
   sosBtn:{backgroundColor:C.red},
   nextBtnDis:{backgroundColor:C.muted},

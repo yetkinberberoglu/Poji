@@ -19,14 +19,22 @@ const corsHeaders = {
 function buildMessage(template: string, d: Record<string, any>): string {
   switch (template) {
     case 'new_job_offer':
-      return `🔔 *New job on Poji*\n\n`
+      if (d.model === 'quote') {
+        return `💬 *New request — they need a price*\n\n`
+          + `📍 ${d.address}\n`
+          + `📅 ${d.date} at ${d.time}\n\n`
+          + `Message them, work out what the job is, then send your quote. `
+          + `Don't travel until they accept.\n\n`
+          + `Open Poji: ${d.appUrl}`;
+      }
+      return `🔔 *New job for you*\n\n`
         + `📍 ${d.address}\n`
         + `📅 ${d.date} at ${d.time}\n`
-        + `⏱ ${d.hours}h × ${d.numCleaners} cleaner${d.numCleaners > 1 ? 's' : ''}\n`
-        + `🧹 ${String(d.serviceType || 'standard').replace('_', ' ')}\n\n`
-        + `💰 *You earn €${Number(d.earnings).toFixed(2)}*\n\n`
-        + `You have priority on this job for 5 minutes.\n`
-        + `Open Poji to accept: ${d.appUrl}`;
+        + (d.model === 'fixed' ? `` : `⏱ about ${d.hours}h\n`)
+        + (d.earnings ? `💶 You'd earn €${Number(d.earnings).toFixed(2)}\n` : '')
+        + `\nYou have first refusal for 5 minutes, then it goes to everyone.\n\n`
+        + `Open Poji: ${d.appUrl}`;
+
 
     case 'job_in_pool':
       return `🌐 *Job available on Poji*\n\n`

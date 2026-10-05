@@ -18,7 +18,29 @@ export type ServiceType = {
   price_min?: number | null;
   price_max?: number | null;
   quote_prompt?: string | null;
+  questions?: ServiceQuestion[] | null;
 };
+
+/** A question a service needs answered before anyone turns up */
+export type ServiceQuestion = {
+  id: string;
+  label: string;
+  type: 'choice' | 'text';
+  options?: string[];
+  placeholder?: string;
+  required?: boolean;
+};
+
+/** Which required questions still have no answer */
+export function missingAnswers(
+  questions: ServiceQuestion[] | null | undefined,
+  answers: Record<string, string>,
+): string[] {
+  if (!questions?.length) return [];
+  return questions
+    .filter(q => q.required && !(answers[q.id] || '').trim())
+    .map(q => q.label);
+}
 
 /** A provider's own price for a service they offer */
 export type ProviderService = {

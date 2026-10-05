@@ -37,6 +37,9 @@ export default function ProviderTabs() {
           </View>
         ),
       }} />
+      <Tabs.Screen name="schedule" options={{
+        title:'Schedule', tabBarIcon:({focused})=><Icon e="🗓" focused={focused}/>,
+      }} />
       <Tabs.Screen name="earnings" options={{
         title:'Earnings', tabBarIcon:({focused})=><Icon e="💶" focused={focused}/>,
       }} />
