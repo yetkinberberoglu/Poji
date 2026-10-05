@@ -25,13 +25,12 @@ const day = (iso: string) => {
 };
 
 export default function Chat({
-  booking, role, myId, otherName, otherPhone,
+  booking, role, myId, otherName,
 }: {
   booking: any;
   role: 'client' | 'cleaner';
   myId: string;
   otherName: string;
-  otherPhone?: string | null;
 }) {
   const [open, setOpen]   = useState(false);
   const [msgs, setMsgs]   = useState<Msg[]>([]);
@@ -39,10 +38,33 @@ export default function Chat({
   const [busy, setBusy]   = useState(false);
   const [loading, setLoad]= useState(true);
   const [warn, setWarn]   = useState<string[]>([]);
+  const [calling, setCalling]   = useState(false);
+  const [callError, setCallErr] = useState('');
   const scroller = useRef<ScrollView>(null);
 
   const canSeeContact = contactUnlocked(booking);
   const unread = msgs.filter(m => m.sender_id !== myId && !m.read_at).length;
+
+  const placeCall = async () => {
+    setCalling(true); setCallErr('');
+    try {
+      const { data, error } = await supabase.functions.invoke('bridge-call', {
+        body: { bookingId: booking.id },
+      });
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error || 'Could not connect the call');
+
+      // Poji rings this side first, then the other
+      setCallErr('');
+    } catch (e: any) {
+      setCallErr(
+        e?.message?.includes('not configured')
+          ? 'Calling is not switched on yet — send a message instead.'
+          : (e?.message || 'Could not connect the call. Try a message.')
+      );
+    }
+    setCalling(false);
+  };
 
   const load = async () => {
     const { data } = await supabase.from('messages')
@@ -96,6 +118,24 @@ export default function Chat({
     if (error) { console.log('send:', error.message); return; }
 
     setText('');
+
+    // tell the other side — they are almost certainly not looking at this screen
+    const otherId = role === 'client' ? booking.cleanerId : booking.clientId;
+    if (otherId) {
+      supabase.functions.invoke('send-notification', {
+        body: {
+          userId: otherId,
+          bookingId: booking.id,
+          template: 'new_message',
+          data: {
+            fromName: role === 'client' ? 'Your client' : otherName,
+            preview: body,
+            role: role === 'client' ? 'cleaner' : 'client',
+          },
+        },
+      }).catch(()=>{});
+    }
+
     if (scan.flagged) setWarn(scan.reasons);
     setTimeout(()=>scroller.current?.scrollToEnd({ animated:true }), 120);
   };
@@ -130,22 +170,31 @@ export default function Chat({
             <View style={{width:54}} />
           </View>
 
-          {/* contact details */}
-          {canSeeContact && otherPhone ? (
-            <TouchableOpacity style={s.phoneRow}
-              onPress={()=>Linking.openURL(`tel:${otherPhone}`)}>
-              <Text style={s.phoneIcon}>📞</Text>
-              <Text style={s.phoneTxt}>{otherPhone}</Text>
-              <Text style={s.phoneCall}>Call</Text>
+          {/* Numbers stay private. When the job is close enough to need a
+              voice, the call is placed through Poji so neither side sees the
+              other's number. */}
+          {canSeeContact ? (
+            <TouchableOpacity style={s.callRow} onPress={placeCall} disabled={calling}>
+              <Text style={s.callIcon}>{calling ? '…' : '📞'}</Text>
+              <View style={{flex:1}}>
+                <Text style={s.callTxt}>
+                  {calling ? 'Connecting you…' : `Call ${otherName.split(' ')[0]}`}
+                </Text>
+                <Text style={s.callSub}>Through Poji — your number stays private</Text>
+              </View>
             </TouchableOpacity>
           ) : (
             <View style={s.lockRow}>
               <Text style={s.lockTxt}>
-                🔒  Phone numbers open {CONTACT_WINDOW_HOURS} hours before the job starts.
-                Until then, message here.
+                💬  Message here. Calling opens {CONTACT_WINDOW_HOURS} hours before the
+                job, and goes through Poji so neither of you sees the other's number.
               </Text>
             </View>
           )}
+
+          {callError ? (
+            <View style={s.callErr}><Text style={s.callErrTxt}>{callError}</Text></View>
+          ) : null}
 
           <ScrollView ref={scroller} style={s.list}
             contentContainerStyle={{padding:16, gap:4}}
@@ -243,6 +292,14 @@ const s = StyleSheet.create({
   phoneIcon:{fontSize:16},
   phoneTxt:{flex:1,fontSize:14,fontWeight:'700',color:C.dark},
   phoneCall:{fontSize:13,color:C.green,fontWeight:'800'},
+  callRow:{flexDirection:'row',alignItems:'center',gap:11,backgroundColor:C.greenLt,
+    paddingHorizontal:16,paddingVertical:11,borderBottomWidth:1,borderBottomColor:'#A7F3D0'},
+  callIcon:{fontSize:17},
+  callTxt:{fontSize:14,fontWeight:'800',color:C.dark},
+  callSub:{fontSize:11,color:C.muted,marginTop:1},
+  callErr:{backgroundColor:C.amberLt,paddingHorizontal:16,paddingVertical:9,
+    borderBottomWidth:1,borderBottomColor:'#FDE68A'},
+  callErrTxt:{fontSize:12,color:C.amber,fontWeight:'600',lineHeight:17},
   lockRow:{backgroundColor:C.bgAlt,paddingHorizontal:16,paddingVertical:11,
     borderBottomWidth:1,borderBottomColor:C.border},
   lockTxt:{fontSize:12,color:C.muted,lineHeight:17},

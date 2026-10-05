@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { C, S } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
 import { supabase } from '../../lib/supabase';
+import PushSettings from '../../components/PushSettings';
 import { useState, useEffect } from 'react';
 
 export default function Profile() {

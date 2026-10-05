@@ -7,9 +7,12 @@ import { useState, useEffect } from 'react';
 import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { findTrade } from '../constants/trades';
+import QuestionEditor from '../components/QuestionEditor';
+import RoutePricing from '../components/RoutePricing';
+import { cheapestRoute } from '../lib/transport';
 import {
   loadServiceTypes, loadProviderServices, seedProviderServices,
-  effectiveService, fixedQuote,
+  effectiveService, fixedQuote, optionLabel, optionDelta,
   type ServiceType, type ProviderService,
 } from '../lib/services';
 
@@ -64,6 +67,12 @@ export default function MyServices() {
       price_max:    eff.priceMax != null ? String(eff.priceMax) : '',
       typical_minutes: String(eff.minutes),
       note: own?.note || '',
+      option_prices: { ...(own?.option_prices || {}) },
+      vehicles: own?.vehicles || [],
+      route_prices: { ...(own?.route_prices || {}) },
+      questions: own?.questions?.length
+        ? JSON.parse(JSON.stringify(own.questions))
+        : JSON.parse(JSON.stringify(t.questions || [])),
     });
     setEdit(t.id);
     setError('');
@@ -76,6 +85,11 @@ export default function MyServices() {
       const lo = Number(draft.price_min), hi = Number(draft.price_max);
       if (!lo || !hi)  { setError('Give a price range'); return; }
       if (hi < lo)     { setError('The top of the range is below the bottom'); return; }
+    } else if ((t as any).is_transport) {
+      if (!(draft.vehicles || []).length) { setError('Pick at least one vehicle'); return; }
+      if (!Object.keys(draft.route_prices || {}).length) {
+        setError('Price at least one run'); return;
+      }
     } else if (t.pricing_model === 'fixed') {
       if (!Number(draft.labour_price)) { setError('Set your service charge'); return; }
     }
@@ -94,6 +108,10 @@ export default function MyServices() {
       price_max:    isQuote ? Number(draft.price_max) : null,
       typical_minutes: Number(draft.typical_minutes) || 60,
       note: draft.note.trim() || null,
+      vehicles: draft.vehicles || [],
+      route_prices: draft.route_prices || {},
+      questions: (draft.questions || []).filter((q:any)=>q.label?.trim()),
+      option_prices: {},
       updated_at: new Date().toISOString(),
     }, { onConflict: 'provider_id,service_type_id' });
 
@@ -188,7 +206,11 @@ export default function MyServices() {
 
                         {on && (
                           <Text style={s.cardPrice}>
-                            {isHourly ? 'Charged at your hourly rate'
+                            {(t as any).is_transport
+                              ? (cheapestRoute(own?.route_prices) != null
+                                  ? `${(own?.vehicles||[]).length} vehicle${(own?.vehicles||[]).length===1?'':'s'} · from €${cheapestRoute(own?.route_prices)}`
+                                  : 'Set your vehicles and prices')
+                              : isHourly ? 'Charged at your hourly rate'
                               : isQuote ? (eff.priceMin && eff.priceMax
                                   ? `€${eff.priceMin} – €${eff.priceMax} · you quote after talking`
                                   : 'Set your range')
@@ -199,6 +221,13 @@ export default function MyServices() {
                         {on && q && (
                           <Text style={s.cardClient}>
                             Client pays €{q.clientPays.toFixed(0)} · you keep €{q.providerGets.toFixed(0)}
+                          </Text>
+                        )}
+
+                        {on && (own?.questions?.length ?? 0) > 0 && (
+                          <Text style={s.cardOpts}>
+                            {own!.questions!.length} question
+                            {own!.questions!.length>1?'s':''} of your own
                           </Text>
                         )}
 
@@ -223,7 +252,13 @@ export default function MyServices() {
 
                     {open && (
                       <View style={s.form}>
-                        {isQuote ? (
+                        {(t as any).is_transport ? (
+                          <RoutePricing
+                            vehicles={draft.vehicles || []}
+                            prices={draft.route_prices || {}}
+                            onChange={(v,p)=>setDraft((d:any)=>({ ...d, vehicles:v, route_prices:p }))}
+                          />
+                        ) : isQuote ? (
                           <>
                             <Text style={s.formHint}>
                               You can't price this blind, so give a range. The client
@@ -278,6 +313,19 @@ export default function MyServices() {
                           </>
                         )}
 
+                        {!(t as any).is_transport && (
+                        <>
+                        <Text style={s.lbl}>What you ask the client</Text>
+                        <QuestionEditor
+                          value={draft.questions || []}
+                          onChange={(q)=>setDraft((d:any)=>({ ...d, questions: q }))}
+                        />
+
+                        </>
+                        )}
+
+                        {!(t as any).is_transport && (
+                        <>
                         <Text style={s.lbl}>How long on site</Text>
                         <View style={s.pillWrap}>
                           {[20,30,45,60,90,120,180].map(m=>(
@@ -290,6 +338,8 @@ export default function MyServices() {
                             </TouchableOpacity>
                           ))}
                         </View>
+                        </>
+                        )}
 
                         <Text style={s.lbl}>Note for clients (optional)</Text>
                         <TextInput style={[s.input,{minHeight:70}]} value={draft.note}
@@ -372,6 +422,7 @@ const s = StyleSheet.create({
   cardPrice:{fontSize:12,fontWeight:'700',color:C.primary,marginTop:6},
   cardClient:{fontSize:11,color:C.muted,marginTop:3},
   cardNote:{fontSize:11,color:C.text,marginTop:5,fontStyle:'italic',lineHeight:16},
+  cardOpts:{fontSize:11,color:C.green,fontWeight:'700',marginTop:4},
   dim:{opacity:0.5},
   editBtn:{marginTop:10,paddingTop:10,borderTopWidth:1,borderTopColor:C.bg},
   editTxt:{fontSize:12,color:C.primary,fontWeight:'700'},
@@ -391,6 +442,15 @@ const s = StyleSheet.create({
   pillTxt:{fontSize:12,fontWeight:'600',color:C.muted},
   pillTxtOn:{color:C.white},
 
+  optBlock:{marginTop:6},
+  optHint:{fontSize:11,color:C.muted,lineHeight:16,marginBottom:8,marginTop:-2},
+  optRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',
+    gap:12,paddingVertical:7},
+  optLabel:{flex:1,fontSize:13,color:C.text},
+  optInputWrap:{flexDirection:'row',alignItems:'center',backgroundColor:C.white,
+    borderRadius:10,borderWidth:1.5,borderColor:C.border,paddingLeft:10,width:104},
+  optCurrency:{fontSize:13,color:C.muted,fontWeight:'700'},
+  optInput:{flex:1,paddingVertical:9,paddingHorizontal:6,fontSize:14,color:C.text},
   previewBox:{backgroundColor:C.greenLt,borderRadius:11,padding:12,gap:6,marginTop:14,
     borderWidth:1,borderColor:'#A7F3D0'},
   previewRow:{flexDirection:'row',justifyContent:'space-between'},

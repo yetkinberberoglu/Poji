@@ -10,13 +10,13 @@ import Chat from '../../components/Chat';
 import QuotePanel from '../../components/QuotePanel';
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
-  pending:               {label:'Waiting for cleaner',color:C.amber, bg:C.amberLt,   icon:'⏳'},
+  pending:               {label:'Waiting for provider',color:C.amber, bg:C.amberLt,   icon:'⏳'},
   pending_pool:          {label:'Finding a provider',color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
   reschedule_proposed:   {label:'New time offered', color:C.teal,   bg:C.tealLt,    icon:'📅'},
   quoted:                {label:'Quote received',   color:C.teal,   bg:C.tealLt,    icon:'💬'},
   accepted:              {label:'Accepted',          color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'On the way',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
-  arrived:               {label:'Cleaner arrived',   color:C.amber,  bg:C.amberLt,   icon:'🔐'},
+  arrived:               {label:'Provider arrived',   color:C.amber,  bg:C.amberLt,   icon:'🔐'},
   in_progress:           {label:'In Progress',       color:C.primary,bg:C.primaryLt, icon:'🧹'},
   awaiting_confirmation: {label:'Confirm the work',  color:C.teal,   bg:C.tealLt,    icon:'👀'},
   completed:             {label:'Completed',         color:C.green,  bg:C.greenLt,   icon:'✓'},
@@ -38,7 +38,7 @@ const prettyDate = (d?: string) => {
 };
 
 const DISPUTE_REASONS = [
-  'Cleaner never showed up',
+  'Nobody showed up',
   'Work was incomplete',
   'Quality was poor',
   'Left earlier than booked',
@@ -55,6 +55,7 @@ export default function Bookings() {
   const [now, setNow]                 = useState(Date.now());
   const [checklist, setChecklist]     = useState<Record<string, any[]>>({});
   const [openList, setOpenList]       = useState<string|null>(null);
+  const [actionError, setActionError] = useState('');
 
   const loadChecklist = async (bookingId: string) => {
     const { data } = await supabase.from('booking_checklist')
@@ -74,7 +75,15 @@ export default function Bookings() {
   }, []);
 
   const onRefresh = async () => { setRefreshing(true); await loadBookings(); setRefreshing(false); };
-  const confirmWork = async (id: string) => { setBusy(id); await clientConfirm(id); setBusy(null); };
+  const confirmWork = async (id: string) => {
+    setBusy(id); setActionError('');
+    try {
+      await clientConfirm(id);
+    } catch (e: any) {
+      setActionError(e?.message || 'Could not approve that');
+    }
+    setBusy(null);
+  };
   const doRelease = async (id: string) => { setBusy(id); await releaseToPool(id); setBusy(null); };
 
   const doQuoteReply = async (id: string, accept: boolean) => {
@@ -112,6 +121,15 @@ export default function Bookings() {
     <ScrollView style={st.wrap} showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary}/>}>
       <Text style={st.heading}>My Bookings</Text>
+
+      {actionError ? (
+        <View style={st.errBanner}>
+          <Text style={st.errBannerTxt}>⚠️  {actionError}</Text>
+          <TouchableOpacity onPress={()=>setActionError('')}>
+            <Text style={st.errBannerX}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <Text style={st.sub}>Pull down to refresh</Text>
 
       {bookings.length===0 && (
@@ -160,20 +178,35 @@ export default function Bookings() {
                 if (left) {
                   return (
                     <View style={st.waitBox}>
-                      <Text style={st.waitTitle}>⏳  Waiting for {cleaner?.name||'your cleaner'}</Text>
+                      <Text style={st.waitTitle}>⏳  Waiting for {cleaner?.name||'your provider'}</Text>
                       <Text style={st.waitTxt}>We've notified them. They have priority on this job for the next few minutes.</Text>
                       <Text style={st.countdown}>{left} left</Text>
                     </View>
                   );
                 }
+                // Who else could actually take this? Only people in the same
+                // trade, free to work, and not the one who went quiet.
+                const alternatives = cleaners.filter(c =>
+                  c.id !== b.cleanerId &&
+                  c.available &&
+                  (!b.tradeId || ((c as any).categories || []).includes(b.tradeId))
+                );
+                const alone = alternatives.length === 0;
+
                 return (
                   <View style={st.chooseBox}>
-                    <Text style={st.chooseTitle}>😕  {cleaner?.name||'Your cleaner'} hasn't responded</Text>
-                    <Text style={st.chooseTxt}>They may be busy or haven't seen your request yet. What would you like to do?</Text>
+                    <Text style={st.chooseTitle}>
+                      😕  {cleaner?.name||'Your provider'} hasn't responded
+                    </Text>
+                    <Text style={st.chooseTxt}>
+                      {alone
+                        ? "They're the only provider covering this in your area right now, so there's nobody else to ask. Give them a little longer, send them a message, or cancel — nothing has been charged."
+                        : `They may be busy or haven't seen it yet. ${alternatives.length} other ${alternatives.length===1?'provider':'providers'} could take this.`}
+                    </Text>
                     {pickFor===b.id ? (
                       <View style={st.pickList}>
-                        <Text style={st.pickLabel}>Choose another cleaner</Text>
-                        {cleaners.filter(c=>c.id!==b.cleanerId && c.available).slice(0,5).map(c=>(
+                        <Text style={st.pickLabel}>Choose someone else</Text>
+                        {alternatives.slice(0,5).map(c=>(
                           <TouchableOpacity key={c.id} style={st.pickRow} disabled={isBusy}
                             onPress={()=>doReassign(b.id, c.id)}>
                             <View style={[st.pickAvatar,{backgroundColor:c.color+'22'}]}>
@@ -191,15 +224,37 @@ export default function Bookings() {
                         </TouchableOpacity>
                       </View>
                     ) : (
-                      <View style={st.chooseActions}>
-                        <TouchableOpacity style={[st.poolBtn,isBusy&&st.dis]} disabled={isBusy}
-                          onPress={()=>doRelease(b.id)}>
-                          <Text style={st.whiteTxt}>{isBusy?'…':'🌐  Notify all cleaners'}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={st.pickBtn} onPress={()=>setPickFor(b.id)}>
-                          <Text style={st.pickBtnTxt}>Choose someone else</Text>
-                        </TouchableOpacity>
-                      </View>
+                      alone ? (
+                        <View style={st.chooseActions}>
+                          <TouchableOpacity style={[st.poolBtn,isBusy&&st.dis]} disabled={isBusy}
+                            onPress={()=>doRelease(b.id)}>
+                            <Text style={st.whiteTxt}>
+                              {isBusy?'…':'⏳  Keep waiting'}
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={st.pickBtn}
+                            onPress={()=>updateStatus(b.id,'cancelled')}>
+                            <Text style={st.pickBtnTxt}>Cancel this request</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : (
+                        <View style={st.chooseActions}>
+                          <TouchableOpacity style={[st.poolBtn,isBusy&&st.dis]} disabled={isBusy}
+                            onPress={()=>doRelease(b.id)}>
+                            <Text style={st.whiteTxt}>
+                              {isBusy?'…'
+                                : alternatives.length === 1
+                                ? `🔔  Ask ${alternatives[0].name.split(' ')[0]} instead`
+                                : '🌐  Ask the others too'}
+                            </Text>
+                          </TouchableOpacity>
+                          {alternatives.length > 1 && (
+                            <TouchableOpacity style={st.pickBtn} onPress={()=>setPickFor(b.id)}>
+                              <Text style={st.pickBtnTxt}>Pick someone myself</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )
                     )}
                   </View>
                 );
@@ -261,22 +316,37 @@ export default function Bookings() {
 
               {b.status==='pending_pool' && (
                 <View style={st.poolBox}>
-                  <Text style={st.poolTitle}>🌐  Finding you a cleaner</Text>
-                  <Text style={st.poolTxt}>All available cleaners in your area have been notified. The first to accept will take this job.</Text>
+                  {(() => {
+                    const pool = cleaners.filter(c =>
+                      c.available &&
+                      (!b.tradeId || ((c as any).categories || []).includes(b.tradeId)));
+                    return (
+                      <>
+                        <Text style={st.poolTitle}>🌐  Finding you a provider</Text>
+                        <Text style={st.poolTxt}>
+                          {pool.length === 0
+                            ? "Nobody covering this is free at the moment. We'll keep looking and message you the moment someone can take it."
+                            : pool.length === 1
+                            ? `${pool[0].name.split(' ')[0]} is the one provider covering this in your area. They've been notified.`
+                            : `All ${pool.length} providers covering this have been notified. The first to accept takes the job.`}
+                        </Text>
+                      </>
+                    );
+                  })()}
                 </View>
               )}
 
               {b.status==='en_route' && (
                 <View style={st.trackBox}>
-                  <Text style={st.trackTxt}>🚗  Your cleaner is on the way</Text>
+                  <Text style={st.trackTxt}>🚗  Your provider is on the way</Text>
                 </View>
               )}
 
               {b.status==='arrived' && b.pinCode && (
                 <View style={st.pinBox}>
-                  <Text style={st.pinTitle}>🔐  Give this PIN to your cleaner</Text>
+                  <Text style={st.pinTitle}>🔐  Give this PIN to your provider</Text>
                   <Text style={st.pinCode}>{b.pinCode}</Text>
-                  <Text style={st.pinHint}>The job only starts once your cleaner enters this code. Never share it before they arrive.</Text>
+                  <Text style={st.pinHint}>The job only starts once your provider enters this code. Never share it before they arrive.</Text>
                 </View>
               )}
 
@@ -309,7 +379,6 @@ export default function Bookings() {
                   role="client"
                   myId={userId}
                   otherName={cleaner.name}
-                  otherPhone={(cleaner as any).phone}
                 />
               )}
 
@@ -324,7 +393,7 @@ export default function Bookings() {
 
               {b.status==='awaiting_confirmation' && (
                 <View style={st.confirmBox}>
-                  <Text style={st.confirmTitle}>👀  Your cleaner marked this job as finished</Text>
+                  <Text style={st.confirmTitle}>👀  Your provider marked this job as finished</Text>
                   <Text style={st.confirmTxt}>Please check the work and confirm. If you don't respond within 6 hours, it is approved automatically.</Text>
                   {b.actualMinutes != null && (
                     <View style={st.billBox}>
@@ -614,6 +683,11 @@ const st = StyleSheet.create({
   approveBtn:{flex:1,backgroundColor:C.green,borderRadius:12,paddingVertical:12,alignItems:'center'},
   whiteTxt:{color:C.white,fontWeight:'700',fontSize:13},
   dis:{opacity:0.5},
+  errBanner:{flexDirection:'row',alignItems:'center',gap:10,marginHorizontal:20,
+    marginBottom:14,backgroundColor:C.redLt,borderRadius:12,padding:13,
+    borderWidth:1,borderColor:'#FECACA'},
+  errBannerTxt:{flex:1,fontSize:13,color:C.red,fontWeight:'600',lineHeight:18},
+  errBannerX:{fontSize:15,color:C.red,fontWeight:'800'},
   disputeForm:{gap:10,marginTop:8},
   disputeLabel:{fontSize:12,fontWeight:'700',color:C.text},
   reasonRow:{flexDirection:'row',flexWrap:'wrap',gap:6},

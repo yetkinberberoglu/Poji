@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/notify';
 import { canTakeJob } from '../lib/availability';
+import { touchPush } from '../lib/push';
 import { seedChecklist, seedExtraTasks, finalQuote, fixedQuote, loadParts, partsSummary } from '../lib/services';
 
 export const MOCK_CLEANERS: any[] = [];
@@ -48,6 +49,8 @@ export interface Booking {
   vehicleInfo?: string | null;
   tradeId?: string | null;
   answers?: Record<string,string> | null;
+  fromLocality?: string | null; toLocality?: string | null;
+  vehicleType?: string | null; routeBand?: string | null; loadNote?: string | null;
   labourTotal?: number | null;
   quoteAmount?: number | null;
   quoteParts?: number | null;
@@ -85,7 +88,9 @@ interface Ctx {
              locationNote?: string|null; vehicleInfo?: string|null;
              releasedToPool?: boolean; tradeId?: string|null;
              labourTotal?: number|null; partsTotal?: number|null;
-             answers?: Record<string,string> }
+             answers?: Record<string,string>;
+             fromLocality?: string|null; toLocality?: string|null;
+             vehicleType?: string|null; routeBand?: string|null; loadNote?: string|null }
   ) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   markArrived: (id: string) => Promise<string>;
@@ -289,6 +294,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         vehicleInfo: b.vehicle_info,
         tradeId: b.trade_id,
         answers: b.answers,
+        fromLocality: b.from_locality,
+        toLocality: b.to_locality,
+        vehicleType: b.vehicle_type,
+        routeBand: b.route_band,
+        loadNote: b.load_note,
         labourTotal: b.labour_total,
         quoteAmount: b.quote_amount,
         quoteParts: b.quote_parts,
@@ -302,16 +312,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const { data } = await supabase
       .from('bookings').select('id')
       .eq('status', 'awaiting_confirmation').lt('auto_confirm_at', now);
-    if (data && data.length > 0) {
-      const ids = data.map(d => d.id);
-      await supabase.from('bookings')
-        .update({ status: 'completed', client_confirmed_at: now }).in('id', ids);
-      setBookings(prev => prev.map(b => ids.includes(b.id) ? { ...b, status: 'completed' } : b));
+    if (!data?.length) return;
+
+    // Each one goes through the same settlement as a manual approval,
+    // so the figures are worked out in exactly one place.
+    const done: string[] = [];
+    for (const row of data) {
+      const { error } = await supabase.rpc('confirm_job', { p_booking: row.id });
+      if (!error) done.push(row.id);
+      else console.log('autoConfirm skipped', row.id, error.message);
+    }
+
+    if (done.length) {
+      setBookings(prev => prev.map(b =>
+        done.includes(b.id) ? { ...b, status: 'completed' } : b));
     }
   };
 
   useEffect(() => {
-    loadUser(); loadBookings(); loadCleaners(); autoConfirmExpired();
+    loadUser(); loadBookings(); loadCleaners(); autoConfirmExpired(); touchPush();
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session) { loadUser(); loadBookings(); loadCleaners(); }
       else { setUserRole('client'); setUserName(''); setUserId(''); setBookings([]); }
@@ -366,7 +385,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
              locationNote?: string|null; vehicleInfo?: string|null;
              releasedToPool?: boolean; tradeId?: string|null;
              labourTotal?: number|null; partsTotal?: number|null;
-             answers?: Record<string,string> }
+             answers?: Record<string,string>;
+             fromLocality?: string|null; toLocality?: string|null;
+             vehicleType?: string|null; routeBand?: string|null; loadNote?: string|null }
   ) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
@@ -406,6 +427,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       vehicle_info: meta?.vehicleInfo ?? null,
       trade_id: meta?.tradeId ?? null,
       answers: meta?.answers && Object.keys(meta.answers).length ? meta.answers : null,
+      from_locality: meta?.fromLocality ?? null,
+      to_locality: meta?.toLocality ?? null,
+      vehicle_type: meta?.vehicleType ?? null,
+      route_band: meta?.routeBand ?? null,
+      load_note: meta?.loadNote ?? null,
       labour_total: meta?.labourTotal ?? null,
       parts_total: meta?.partsTotal ?? 0,
       preferred_cleaner_id: b.cleanerId || null,
@@ -547,33 +573,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     id: string, labour: number, parts: number, note: string, myId: string
   ) => {
     const bk = bookings.find(x => x.id === id);
-    const q = fixedQuote({ labourPrice: labour, partsPrice: parts });
+
+    const { data, error } = await supabase.rpc('send_quote', {
+      p_booking: id,
+      p_labour: labour,
+      p_parts: parts || 0,
+      p_note: note || null,
+    });
+
+    if (error) { console.log('sendQuote error:', error.message); throw new Error(error.message); }
+
+    const s: any = data || {};
 
     setBookings(prev => prev.map(b => b.id === id
       ? { ...b, status:'quoted', cleanerId: myId,
           quoteAmount: labour, quoteParts: parts, quoteNote: note,
-          total: q.clientPays }
+          total: s.total ?? b.total }
       : b));
-
-    const { error } = await supabase.from('bookings').update({
-      status: 'quoted',
-      cleaner_id: myId,
-      quote_amount: labour,
-      quote_parts: parts,
-      quote_note: note || null,
-      quoted_at: new Date().toISOString(),
-      quote_expires_at: new Date(Date.now() + 24*3600*1000).toISOString(),
-      total_price: q.clientPays,
-      labour_total: q.labourSide,
-      parts_total: parts,
-    }).eq('id', id);
-
-    if (error) { console.log('sendQuote error:', error.message); return; }
 
     if (bk?.clientId) {
       notify(bk.clientId, 'quote_sent', {
         cleanerName: userName || 'Your provider',
-        amount: q.clientPays.toFixed(2),
+        amount: Number(s.total || 0).toFixed(2),
         note: note || '',
       }, id);
     }
@@ -702,127 +723,97 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const markArrived = async (id: string): Promise<string> => {
-    const pin = String(Math.floor(1000 + Math.random() * 9000));
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'arrived', pinCode: pin } : b));
-    const { error } = await supabase.from('bookings')
-      .update({ status: 'arrived', pin_code: pin }).eq('id', id);
-    if (error) console.log('markArrived error:', error.message);
+    const { data, error } = await supabase.rpc('arrive_at_job', { p_booking: id });
+    if (error) { console.log('markArrived error:', error.message); throw new Error(error.message); }
+
+    const pin = (data as any)?.pin || '';
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b, status: 'arrived', pinCode: pin } : b));
 
     const bk = bookings.find(x => x.id === id);
     if (bk?.clientId) {
       notify(bk.clientId, 'cleaner_arrived', {
-        cleanerName: userName || 'Your cleaner', pin,
+        cleanerName: userName || 'Your provider',
+        pin,
       }, id);
     }
+
     return pin;
   };
 
   const verifyPin = async (id: string, pin: string): Promise<boolean> => {
-    const { data, error } = await supabase
-      .from('bookings').select('pin_code').eq('id', id).maybeSingle();
-    if (error || !data) { console.log('verifyPin error:', error?.message); return false; }
-    if (data.pin_code !== pin.trim()) return false;
+    const { data, error } = await supabase.rpc('start_job', {
+      p_booking: id,
+      p_pin: pin.trim(),
+    });
 
-    const now = new Date().toISOString();
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'in_progress', startedAt: now } : b));
-    await supabase.from('bookings').update({ status: 'in_progress', started_at: now }).eq('id', id);
+    if (error) { console.log('verifyPin error:', error.message); throw new Error(error.message); }
+    if (data !== true) return false;
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b, status: 'in_progress', startedAt: new Date().toISOString() } : b));
+
     return true;
   };
 
   const finishJob = async (id: string, photos?: string[]) => {
-    const bk  = bookings.find(x => x.id === id);
-    const now = new Date();
-    const autoAt = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+    const bk = bookings.find(x => x.id === id);
 
-    // Work out what the job really cost, based on the timer
-    // Parts the client already agreed to go on the final bill
-    const parts = await loadParts(id);
-    const ps    = partsSummary(parts);
+    // The database settles this — rate, minutes, approved parts and commission
+    // are all worked out server-side so nothing here can be tampered with.
+    const { data, error } = await supabase.rpc('finish_job', {
+      p_booking: id,
+      p_photos: photos || null,
+    });
 
-    let settle: any = null;
-    if (bk?.startedAt) {
-      settle = finalQuote({
-        startedAt: bk.startedAt,
-        finishedAt: now.toISOString(),
-        baseRate: Number(bk.hourlyRate) || 15,
-        multiplier: Number(bk.serviceMultiplier) || 1,
-        suppliesByCleaner: bk.suppliesBy === 'cleaner',
-        numCleaners: bk.numCleaners || 1,
-      });
-    }
+    if (error) { console.log('finishJob error:', error.message); throw new Error(error.message); }
+
+    const s: any = data || {};
+    const autoAt = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
 
     setBookings(prev => prev.map(b => b.id === id
       ? { ...b,
           status: 'awaiting_confirmation',
-          finishedAt: now.toISOString(),
-          autoConfirmAt: autoAt.toISOString(),
+          finishedAt: new Date().toISOString(),
+          autoConfirmAt: autoAt,
           completionPhotos: photos || null,
-          actualMinutes: settle?.actualMinutes ?? null,
-          finalTotal: settle ? +(settle.total + ps.approvedTotal).toFixed(2)
-                     : ps.approvedTotal > 0 ? +(Number(bk?.total||0) + ps.approvedTotal).toFixed(2)
-                     : null,
-          finalCleanerPayment: settle ? +(settle.cleanerGets + ps.providerGets).toFixed(2) : null,
-          finalPlatformCommission: settle ? +(settle.platform + ps.commission).toFixed(2) : null,
-          finalVat: settle?.vat ?? null,
-          partsTotal: ps.approvedTotal,
+          actualMinutes: s.billed_minutes ?? null,
+          finalTotal: s.total ?? null,
+          finalCleanerPayment: s.provider_gets ?? null,
+          finalPlatformCommission:
+            (Number(s.labour_commission) || 0) + (Number(s.parts_commission) || 0),
+          finalVat: s.vat ?? null,
+          partsTotal: s.parts ?? 0,
         }
       : b));
 
-    const payload: any = {
-      status: 'awaiting_confirmation',
-      finished_at: now.toISOString(),
-      auto_confirm_at: autoAt.toISOString(),
-      completion_photos: photos || null,
-    };
-    payload.parts_total      = ps.approvedTotal;
-    payload.parts_commission = ps.commission;
-
-    if (settle) {
-      payload.actual_minutes            = settle.actualMinutes;
-      payload.final_total               = +(settle.total + ps.approvedTotal).toFixed(2);
-      payload.final_cleaner_payment     = +(settle.cleanerGets + ps.providerGets).toFixed(2);
-      payload.final_platform_commission = +(settle.platform + ps.commission).toFixed(2);
-      payload.final_vat                 = settle.vat;
-    } else if (ps.approvedTotal > 0 && bk) {
-      // fixed-price job — labour was already agreed, just add the parts
-      const labour = Number(bk.total) || 0;
-      payload.final_total           = +(labour + ps.approvedTotal).toFixed(2);
-      payload.final_cleaner_payment = +(labour/1.029/1.18*0.80 + ps.providerGets).toFixed(2);
-      payload.final_platform_commission = +(labour/1.029/1.18*0.20 + ps.commission).toFixed(2);
-    }
-
-    const { error } = await supabase.from('bookings').update(payload).eq('id', id);
-    if (error) console.log('finishJob error:', error.message);
-
     if (bk?.clientId) {
       notify(bk.clientId, 'job_finished', {
-        cleanerName: userName || 'Your cleaner',
+        cleanerName: userName || 'Your provider',
       }, id);
     }
   };
 
   const clientConfirm = async (id: string) => {
-    const now = new Date().toISOString();
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'completed', clientConfirmedAt: now } : b));
     const bk = bookings.find(x => x.id === id);
-    const payload: any = { status: 'completed', client_confirmed_at: now };
 
-    // The final figure becomes the billed amount
-    if (bk?.finalTotal) {
-      payload.total_price         = bk.finalTotal;
-      payload.parts_total         = bk.partsTotal ?? 0;
-      payload.cleaner_payment     = bk.finalCleanerPayment;
-      payload.platform_commission = bk.finalPlatformCommission;
-      payload.vat_amount          = bk.finalVat;
-      payload.hours               = +((bk.actualMinutes || 0) / 60).toFixed(2);
-    }
+    const { data, error } = await supabase.rpc('confirm_job', { p_booking: id });
+    if (error) { console.log('clientConfirm error:', error.message); throw new Error(error.message); }
 
-    const { error } = await supabase.from('bookings').update(payload).eq('id', id);
-    if (error) console.log('clientConfirm error:', error.message);
+    const s: any = data || {};
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b,
+          status: 'completed',
+          clientConfirmedAt: new Date().toISOString(),
+          total: s.total ?? b.total,
+        }
+      : b));
 
     if (bk?.cleanerId) {
       notify(bk.cleanerId, 'job_completed', {
-        earnings: bk.finalCleanerPayment ?? (bk.total / 1.029 / 1.18 * 0.80),
+        earnings: s.provider_gets ?? bk.finalCleanerPayment ?? 0,
       }, id);
     }
   };

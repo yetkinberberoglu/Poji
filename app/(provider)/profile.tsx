@@ -10,6 +10,7 @@ import { CATEGORIES, tradesIn, findTrade } from '../../constants/trades';
 import { MALTA_MAIN, GOZO_LOCALITIES, validateIban, formatIban } from '../../constants/malta';
 import { MultiPicker } from '../../components/Picker';
 import Avatar from '../../components/Avatar';
+import PushSettings from '../../components/PushSettings';
 import AvailabilityGrid from '../../components/AvailabilityGrid';
 import {
   DEFAULT_AVAILABILITY, describe, countSlots, type Availability,
@@ -601,6 +602,8 @@ export default function ProviderProfile() {
       />
 
       {/* ══ static links ══ */}
+      <PushSettings role="cleaner" />
+
       <Text style={s.sectionTitle}>Account</Text>
 
       <TouchableOpacity style={s.linkRow} onPress={()=>router.push('/my-services')}>

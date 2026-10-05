@@ -1,4 +1,4 @@
-const CACHE = 'poji-v1';
+const CACHE = 'poji-v2';
 const SHELL = ['/', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -47,5 +47,52 @@ self.addEventListener('fetch', e => {
         return res;
       })
     )
+  );
+});
+
+
+/* ── Push ──────────────────────────────────────────────────────
+   A job offer, a message, a payment. Tapping one should land on the
+   screen it's about, not the home page.
+   ───────────────────────────────────────────────────────────── */
+
+self.addEventListener('push', event => {
+  if (!event.data) return;
+
+  let payload;
+  try { payload = event.data.json(); }
+  catch { payload = { title: 'Poji', body: event.data.text() }; }
+
+  const title = payload.title || 'Poji';
+  const options = {
+    body: payload.body || '',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: payload.tag || undefined,
+    renotify: !!payload.tag,
+    requireInteraction: !!payload.urgent,
+    data: { url: payload.url || '/' },
+    vibrate: payload.urgent ? [200, 100, 200, 100, 200] : [100],
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || '/';
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(list => {
+        // if Poji is already open somewhere, use that window
+        for (const client of list) {
+          if (client.url.includes(self.location.origin) && 'focus' in client) {
+            client.navigate(target);
+            return client.focus();
+          }
+        }
+        return self.clients.openWindow(target);
+      })
   );
 });

@@ -50,6 +50,8 @@ export const optionDelta = (o: string | PricedOption) =>
 export function answerAdjustments(
   questions: ServiceQuestion[] | null | undefined,
   answers: Record<string, string>,
+  /** `${questionId}:${optionLabel}` → price, when a provider sets their own */
+  overrides?: Record<string, number> | null,
 ) {
   let labour = 0, parts = 0;
   const lines: { label: string; amount: number; kind: 'labour'|'parts' }[] = [];
@@ -60,7 +62,10 @@ export function answerAdjustments(
     if (!chosen) return;
     const opt = q.options.find(o => optionLabel(o) === chosen);
     if (!opt) return;
-    const delta = optionDelta(opt);
+
+    const key = `${q.id}:${optionLabel(opt)}`;
+    const own = overrides?.[key];
+    const delta = own != null ? Number(own) : optionDelta(opt);
     if (!delta) return;
 
     if (q.affects === 'parts') parts += delta;
@@ -96,6 +101,10 @@ export type ProviderService = {
   price_max: number | null;
   typical_minutes: number | null;
   note: string | null;
+  option_prices?: Record<string, number> | null;
+  questions?: ServiceQuestion[] | null;
+  vehicles?: string[] | null;
+  route_prices?: Record<string, number> | null;
 };
 
 export type ServiceExtra = {
@@ -454,6 +463,10 @@ export function effectiveService(
 ): {
   labour: number; parts: number; partsLabel: string | null;
   minutes: number; priceMin: number | null; priceMax: number | null;
+  optionPrices: Record<string, number> | null;
+  questions: ServiceQuestion[];
+  vehicles: string[];
+  routePrices: Record<string, number>;
   custom: boolean;
 } {
   const num = (a: any, b: any) => {
@@ -461,6 +474,11 @@ export function effectiveService(
     return v == null ? 0 : Number(v);
   };
   return {
+    optionPrices: (own?.option_prices || null) as Record<string, number> | null,
+    // a provider's own list wins outright — their stages, their brands
+    questions: (own?.questions?.length ? own.questions : (type.questions || [])) as ServiceQuestion[],
+    vehicles: (own?.vehicles || []) as string[],
+    routePrices: (own?.route_prices || {}) as Record<string, number>,
     labour:     num(own?.labour_price,    type.labour_price),
     parts:      num(own?.parts_price,     type.parts_price),
     partsLabel: own?.parts_label ?? type.parts_label ?? null,

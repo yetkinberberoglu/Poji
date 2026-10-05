@@ -150,6 +150,22 @@ async function sendWhatsApp(to: string, body: string) {
   return json.sid as string;
 }
 
+/** Push rides alongside WhatsApp — whichever reaches them first, wins. */
+async function alsoPush(userId: string, kind: string, data: any) {
+  try {
+    await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-push`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+      },
+      body: JSON.stringify({ userId, kind, data }),
+    });
+  } catch (e) {
+    console.log('push alongside failed:', e);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -171,7 +187,11 @@ Deno.serve(async (req) => {
       if (clp?.phone) { phone = clp.phone; optIn = clp.whatsapp_opt_in ?? true; }
     }
 
-    const body = buildMessage(template, { ...data, appUrl: data?.appUrl || 'https://poji.mt' });
+    // Push goes out whatever happens to the WhatsApp side. It costs nothing
+    // and it's usually the one they see first.
+    alsoPush(userId, template, { ...data, bookingId });
+
+    const body = buildMessage(template, { ...data, appUrl: data?.appUrl || 'https://po-ji.com' });
 
     // Log the attempt
     const { data: logRow } = await supabase.from('notifications').insert({

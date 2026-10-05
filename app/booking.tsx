@@ -9,6 +9,11 @@ import { useApp } from '../context/AppContext';
 import Avatar from '../components/Avatar';
 import { canTakeJob } from '../lib/availability';
 import ServiceQuestions from '../components/ServiceQuestions';
+import Picker from '../components/Picker';
+import {
+  ALL_LOCALITIES, VEHICLES, bandFor, bandLabel, vehicleLabel,
+  routePrice, cheapestRoute,
+} from '../lib/transport';
 import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
@@ -84,6 +89,10 @@ export default function BookingScreen() {
   const [address, setAddr]        = useState('');
   const [notes, setNotes]         = useState('');
   const [answers, setAnswers]     = useState<Record<string,string>>({});
+  const [fromLoc, setFromLoc]     = useState('');
+  const [toLoc, setToLoc]         = useState('');
+  const [vehicle, setVehicle]     = useState('');
+  const [loadNote, setLoadNote]   = useState('');
   const [savedAddr, setSavedAddr] = useState<{line:string; locality:string}|null>(null);
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
@@ -105,11 +114,18 @@ export default function BookingScreen() {
   const model = svcType?.pricing_model ?? 'hourly';
   const isFixed = model === 'fixed';
   const isQuote = model === 'quote';
+  const isTransport = !!(svcType as any)?.is_transport;
 
-  const STEPS = isQuote
-    ? ['Service','Address','Provider','When','Confirm']
-    : isFixed
-    ? ['Service','Address','Provider','When','Confirm']
+  const band = bandFor(fromLoc, toLoc);
+  const myRoutePrice = (isTransport && band && vehicle)
+    ? routePrice(myEff?.routePrices, vehicle, band) : null;
+
+  // For fixed and quoted work the provider's own questions decide what we ask,
+  // so they have to be chosen before we can ask anything.
+  const STEPS = isTransport
+    ? ['Service','Route','Provider','When','Confirm']
+    : (isFixed || isQuote)
+    ? ['Service','Provider','Details','When','Confirm']
     : ['Service','Place','Extras','Provider','When','Confirm'];
 
   // which screen is which, by name rather than number
@@ -136,10 +152,19 @@ export default function BookingScreen() {
   const offersService = (c: any) => {
     if (!svcType) return true;
     const own = prices[c.id];
-    if (own) return own.active !== false;            // they've priced it
+
+    // A driver only appears if they've priced the run being asked for
+    if (isTransport) {
+      if (!own) return false;
+      if (own.active === false) return false;
+      if (!band || !vehicle) return cheapestRoute(own.route_prices) != null;
+      return routePrice(own.route_prices as any, vehicle, band) != null;
+    }
+
+    if (own) return own.active !== false;
     const trade = svcType.trade_id;
     if (!trade) return true;
-    return (c.categories || []).includes(trade);     // falls back to the trade
+    return (c.categories || []).includes(trade);
   };
 
   const allCapable = cleaners
@@ -166,8 +191,10 @@ export default function BookingScreen() {
     svcType ? effectiveService(svcType, providerId ? prices[providerId] : null) : null;
 
   const myEff = effFor(pickedCleaner);
+  const qs0 = (myEff?.questions || svcType?.questions || []) as any[];
 
-  const adj = answerAdjustments(svcType?.questions as any, answers);
+  // The platform's typical figures, used while they're still answering
+  const adj = answerAdjustments(qs0, answers, myEff?.optionPrices);
 
   const flatQuote = fixedQuote({
     labourPrice: (myEff?.labour ?? Number(svcType?.labour_price) ?? 0) + adj.labour,
@@ -175,7 +202,12 @@ export default function BookingScreen() {
     calloutFee:  Number(svcType?.callout_fee) || 0,
   });
 
-  const total = isQuote ? 0 : isFixed ? flatQuote.clientPays : hourlyQuote.clientPays;
+  const transportQuote = fixedQuote({ labourPrice: myRoutePrice || 0, partsPrice: 0 });
+
+  const total = isQuote ? 0
+    : isTransport ? transportQuote.clientPays
+    : isFixed ? flatQuote.clientPays
+    : hourlyQuote.clientPays;
 
   /** What this provider would charge for this exact job */
   const quoteFor = (c: any) => {
@@ -189,10 +221,21 @@ export default function BookingScreen() {
       };
     }
 
+    if (isTransport) {
+      const p = (band && vehicle) ? routePrice(eff?.routePrices, vehicle, band) : null;
+      const cheapest = cheapestRoute(eff?.routePrices);
+      const base = p ?? cheapest;
+      if (base == null) return { total: null as number|null, label: 'no price' };
+      const q = fixedQuote({ labourPrice: base, partsPrice: 0 });
+      return { total: q.clientPays, label: p != null ? bandLabel(band) : 'from' };
+    }
+
     if (isFixed) {
+      // this provider's own prices, including what they charge per option
+      const own = answerAdjustments(eff?.questions as any, answers, eff?.optionPrices);
       const q = fixedQuote({
-        labourPrice: (eff?.labour || 0) + adj.labour,
-        partsPrice:  (eff?.parts  || 0) + adj.parts,
+        labourPrice: (eff?.labour || 0) + own.labour,
+        partsPrice:  (eff?.parts  || 0) + own.parts,
       });
       return { total: q.clientPays, label: fmtM(eff?.minutes || 60) };
     }
@@ -276,7 +319,7 @@ export default function BookingScreen() {
     try {
       await addBooking({
         cleanerId: cleaner.id,
-        address: address || '12 Tower Road, Sliema',
+        address: isTransport ? `${fromLoc} → ${toLoc}` : (address || '12 Tower Road, Sliema'),
         date: date || iso(new Date()),
         time: time || '10:00',
         hours: isFixed ? (myEff?.minutes || 60) / 60 : hours,
@@ -297,10 +340,15 @@ export default function BookingScreen() {
         extrasForChecklist: selectedExtras,
         tradeId: svcType.trade_id || params.trade || null,
         pricingModel: isQuote ? 'quote' : isFixed ? 'fixed' : 'hourly',
-        labourTotal: isFixed ? flatQuote.labourSide : null,
+        labourTotal: isTransport ? transportQuote.labour : isFixed ? flatQuote.labourSide : null,
         partsTotal:  isFixed ? flatQuote.parts : 0,
         locationNote: notes.trim() || null,
         answers,
+        fromLocality: isTransport ? fromLoc : null,
+        toLocality:   isTransport ? toLoc : null,
+        vehicleType:  isTransport ? vehicle : null,
+        routeBand:    isTransport ? band : null,
+        loadNote:     isTransport ? loadNote.trim() : null,
       });
 
       setPlaced({
@@ -319,20 +367,24 @@ export default function BookingScreen() {
     finally { setLoad(false); }
   };
 
-  const qs = (svcType?.questions || []) as any[];
+  const qs = (myEff?.questions || svcType?.questions || []) as any[];
   const unanswered = missingAnswers(qs, answers);
 
   const canContinue =
     stepName === 'Service'  ? !!svc :
     stepName === 'Place'    ? !!address && unanswered.length === 0 :
-    stepName === 'Address'  ? !!address && unanswered.length === 0 :
+    stepName === 'Route'    ? !!fromLoc && !!toLoc && !!vehicle && !!loadNote.trim() :
+    stepName === 'Details'  ? !!address && unanswered.length === 0 :
     stepName === 'Provider' ? !!pickedCleaner :
     stepName === 'When'     ? !!date && !!time :
     true;
 
   const blockedMsg =
     stepName === 'Service'  ? 'Pick a service' :
-    (stepName === 'Place' || stepName === 'Address')
+    stepName === 'Route'    ? (!fromLoc || !toLoc ? 'Pick both ends of the run'
+                               : !vehicle ? 'Pick a vehicle'
+                               : 'Say what you\u2019re moving') :
+    (stepName === 'Place' || stepName === 'Details')
       ? (!address ? 'Enter an address first' : 'Answer the questions above') :
     stepName === 'Provider' ? 'Pick a provider to continue' :
     stepName === 'When'     ? 'Pick a date and time' : '';
@@ -645,12 +697,83 @@ export default function BookingScreen() {
           </View>
         )}
 
-        {/* ══ ADDRESS — fixed-price jobs ══ */}
-        {stepName === 'Address' && (
+        {/* ══ ROUTE — transport ══ */}
+        {stepName === 'Route' && (
           <View style={s.step}>
-            <Text style={s.stepIntro}>Where is it?</Text>
+            <Text style={s.stepIntro}>Where to where?</Text>
             <Text style={s.hint}>
-              Your provider only sees this once they've accepted the job.
+              Kerbside to kerbside — your driver pulls up outside and takes the load
+              to the door at the other end.
+            </Text>
+
+            <Text style={s.lbl}>Picking up from</Text>
+            <Picker
+              value={fromLoc}
+              options={ALL_LOCALITIES}
+              onChange={setFromLoc}
+              placeholder="Which locality?"
+              title="Picking up from"
+            />
+
+            <Text style={s.lbl}>Dropping off at</Text>
+            <Picker
+              value={toLoc}
+              options={ALL_LOCALITIES}
+              onChange={setToLoc}
+              placeholder="Which locality?"
+              title="Dropping off at"
+            />
+
+            {band && (
+              <View style={s.bandBox}>
+                <Text style={s.bandTxt}>
+                  🚚  {bandLabel(band)}
+                  {band === 'gozo' ? ' — the ferry is in the price' : ''}
+                </Text>
+              </View>
+            )}
+
+            <Text style={s.lbl}>What do you need?</Text>
+            <View style={s.vehGrid}>
+              {VEHICLES.map(v=>{
+                const on = vehicle === v.k;
+                const anyone = cleaners.some(c =>
+                  (prices[c.id]?.vehicles || []).includes(v.k));
+                return (
+                  <TouchableOpacity key={v.k}
+                    style={[s.vehCard, on&&s.vehCardOn, !anyone&&s.vehCardOff]}
+                    disabled={!anyone}
+                    onPress={()=>setVehicle(v.k)}>
+                    <Text style={[s.vehName, on&&s.vehNameOn, !anyone&&s.dim]}>{v.label}</Text>
+                    <Text style={[s.vehHint, !anyone&&s.dim]}>
+                      {anyone ? v.hint : 'Nobody runs one yet'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={s.lbl}>What are you moving?</Text>
+            <TextInput style={[s.input,{minHeight:96}]} value={loadNote}
+              onChangeText={setLoadNote}
+              placeholder="A sofa, a fridge and about ten boxes. Second floor, no lift at the pickup end."
+              placeholderTextColor={C.muted} multiline textAlignVertical="top" />
+            <Text style={s.note}>
+              Your driver reads this before accepting, so they turn up with the right
+              vehicle. Loading help, packing or waiting time is agreed between you —
+              they add it to the job and you approve it.
+            </Text>
+          </View>
+        )}
+
+        {/* ══ DETAILS — fixed and quoted jobs ══ */}
+        {stepName === 'Details' && (
+          <View style={s.step}>
+            <Text style={s.stepIntro}>
+              {cleaner ? `What ${cleaner.name.split(' ')[0]} needs to know` : 'A few details'}
+            </Text>
+            <Text style={s.hint}>
+              Your address is only shared once they've accepted the job.
             </Text>
             {AddressBlock}
 
@@ -671,6 +794,7 @@ export default function BookingScreen() {
                       <Text style={s.runningTotalLbl}>Running total</Text>
                       <Text style={s.runningTotalVal}>€{flatQuote.clientPays.toFixed(2)}</Text>
                     </View>
+
                   </View>
                 )}
               </>
@@ -783,10 +907,12 @@ export default function BookingScreen() {
               {lockedToCleaner ? 'Your provider' : 'Choose your provider'}
             </Text>
             <Text style={s.hint}>
-              {isQuote
+              {isTransport
+                ? `${bandLabel(band)} in a ${vehicleLabel(vehicle).toLowerCase()}. Each driver sets their own price for this run.`
+                : isQuote
                 ? "Nobody can price this without seeing it. Pick someone, message them, and they'll send a figure before anyone travels."
                 : isFixed
-                ? 'Each provider sets their own price and supplies their own parts.'
+                ? "Each provider sets their own price and their own parts. Pick one and they'll ask what they need to know."
                 : `Only providers who can send ${num} ${num===1?'person':'people'} are shown. Each sets their own rate.`}
             </Text>
 
@@ -843,7 +969,9 @@ export default function BookingScreen() {
                   <View style={{alignItems:'flex-end'}}>
                     {q.total != null ? (
                       <>
-                        <Text style={[s.clTotal, on&&{color:C.primary}]}>€{q.total.toFixed(0)}</Text>
+                        <Text style={[s.clTotal, on&&{color:C.primary}]}>
+                          {isFixed ? `from €${q.total.toFixed(0)}` : `€${q.total.toFixed(0)}`}
+                        </Text>
                         <Text style={s.clHours}>{q.label}</Text>
                       </>
                     ) : (
@@ -985,6 +1113,12 @@ export default function BookingScreen() {
             <View style={s.summCard}>
               {[
                 ['Service',  `${svcType.icon || ''} ${svcType.name || ''}`],
+                ...(isTransport ? [
+                  ['Route',   `${fromLoc} → ${toLoc}`],
+                  ['Distance', bandLabel(band)],
+                  ['Vehicle', vehicleLabel(vehicle)],
+                  ['Load',    loadNote],
+                ] : []),
                 ...(isFixed ? [] : [['Property', `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`]]),
                 ['Address',  address || '—'],
                 ['Date',     date ? new Date(date+'T00:00:00').toLocaleDateString('en-GB',
@@ -1034,7 +1168,24 @@ export default function BookingScreen() {
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Price breakdown</Text>
 
-              {isFixed ? (
+              {isTransport ? (
+                <>
+                  {[
+                    [`${bandLabel(band)} · ${vehicleLabel(vehicle)}`, `€${transportQuote.labour.toFixed(2)}`],
+                    ['VAT 18%',  `€${transportQuote.vat.toFixed(2)}`],
+                    ['Card fee', `€${transportQuote.stripeFee.toFixed(2)}`],
+                  ].map(([l,v])=>(
+                    <View key={String(l)} style={s.priceRow}>
+                      <Text style={s.priceLbl}>{l}</Text>
+                      <Text style={s.priceVal}>{v}</Text>
+                    </View>
+                  ))}
+                  <View style={s.totalRow}>
+                    <Text style={s.totalLbl}>Total</Text>
+                    <Text style={s.totalVal}>€{transportQuote.clientPays.toFixed(2)}</Text>
+                  </View>
+                </>
+              ) : isFixed ? (
                 <>
                   {[
                     ['Service charge', `€${(flatQuote.labour - adj.labour).toFixed(2)}`],
@@ -1105,11 +1256,23 @@ export default function BookingScreen() {
 
             <View style={s.finalBox}>
               <Text style={s.finalTitle}>
-                {isQuote ? '💬  Nothing is agreed yet'
+                {isTransport ? '🚚  Driving only'
+                  : isQuote ? '💬  Nothing is agreed yet'
                   : isFixed ? '🔒  This price is fixed'
                   : '💡  How the final price is set'}
               </Text>
-              {isQuote ? (
+              {isTransport ? (
+                <>
+                  <Text style={s.finalTxt}>
+                    This price covers the run and nothing else. Carrying things up
+                    stairs, packing or waiting around is between you and your driver.
+                  </Text>
+                  <Text style={s.finalTxt}>
+                    If you agree something extra, they add it to the job and you
+                    approve it before it appears on the bill.
+                  </Text>
+                </>
+              ) : isQuote ? (
                 <>
                   <Text style={s.finalTxt}>
                     Sending this opens a conversation. Describe the job, answer their
@@ -1401,6 +1564,19 @@ const s = StyleSheet.create({
     borderTopWidth:1,borderTopColor:C.border},
   runningTotalLbl:{fontSize:13,fontWeight:'800',color:C.dark},
   runningTotalVal:{fontSize:16,fontWeight:'800',color:C.primary},
+  runningNote:{fontSize:11,color:C.muted,lineHeight:16,marginTop:4},
+  bandBox:{backgroundColor:C.primaryLt,borderRadius:12,padding:13,marginTop:16,
+    borderWidth:1,borderColor:C.border},
+  bandTxt:{fontSize:13,color:C.primary,fontWeight:'700'},
+  vehGrid:{gap:8},
+  vehCard:{padding:13,borderRadius:14,borderWidth:1.5,borderColor:C.border,
+    backgroundColor:C.white},
+  vehCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt,borderWidth:2},
+  vehCardOff:{opacity:0.4},
+  vehName:{fontSize:14,fontWeight:'700',color:C.dark},
+  vehNameOn:{color:C.primary},
+  vehHint:{fontSize:11,color:C.muted,marginTop:2},
+  dim:{opacity:0.6},
   holdBox:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:6,marginBottom:14,
     borderWidth:1,borderColor:C.border},
   holdTitle:{fontSize:14,fontWeight:'800',color:C.primary},

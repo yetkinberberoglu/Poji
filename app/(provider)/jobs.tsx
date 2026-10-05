@@ -4,6 +4,7 @@ import { useApp } from '../../context/AppContext';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { findTrade } from '../../constants/trades';
+import { bandLabel, vehicleLabel } from '../../lib/transport';
 import PartsPanel from '../../components/PartsPanel';
 import ProposeTime from '../../components/ProposeTime';
 import Chat from '../../components/Chat';
@@ -47,9 +48,14 @@ export default function ProviderScreen() {
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
   const [pinError, setPinError]     = useState<Record<string,string>>({});
   const [proposingFor, setProposing]= useState<string|null>(null);
+  const [actionError, setActionError]= useState('');
   const doQuote = async (id:string, labour:number, parts:number, note:string) => {
     setBusy(id);
-    await sendQuote(id, labour, parts, note, userId);
+    try {
+      await sendQuote(id, labour, parts, note, userId);
+    } catch (e: any) {
+      setActionError(e?.message || 'Could not send that quote');
+    }
     setBusy(null);
   };
 
@@ -166,8 +172,7 @@ export default function ProviderScreen() {
 
   useEffect(() => {
     bookings
-      .filter(b => ['in_progress','awaiting_confirmation'].includes(b.status)
-                && b.pricingModel !== 'fixed')
+      .filter(b => ['in_progress','awaiting_confirmation'].includes(b.status))
       .forEach(b => { if (!checklist[b.id]) loadChecklist(b.id); });
   }, [bookings]);
 
@@ -206,8 +211,23 @@ export default function ProviderScreen() {
     else { setPinError(p => ({...p,[id]:''})); setPinInput(p => ({...p,[id]:''})); }
   };
 
-  const doFinish = async (id: string) => { setBusy(id); await finishJob(id); setBusy(null); };
+  const doFinish = async (id: string) => {
+    setBusy(id);
+    try {
+      await finishJob(id);
+    } catch (e: any) {
+      setActionError(e?.message || 'Could not finish that job');
+    }
+    setBusy(null);
+  };
 
+  /** A job out on the road — the client is standing next to the car, not a door */
+  const isRoadside = (b: any) => b.lat != null && b.lng != null;
+
+  /** Some fixed-price work has no task list to tick */
+  const hasChecklist = (b: any) => (checklist[b.id] || []).length > 0;
+
+  /** Jobs in the trades this provider actually signed up for */
   const inMyTrade = (b: any) => {
     // anything already assigned to me always shows
     if (b.cleanerId === userId) return true;
@@ -266,6 +286,15 @@ export default function ProviderScreen() {
           </View>
         ))}
       </View>}
+
+      {actionError ? (
+        <View style={s0.errBanner}>
+          <Text style={s0.errBannerTxt}>⚠️  {actionError}</Text>
+          <TouchableOpacity onPress={()=>setActionError('')}>
+            <Text style={s0.errBannerX}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {myStatus !== 'approved' && (() => {
         const stage = myApp?.signup_stage || 'basic';
@@ -425,6 +454,35 @@ export default function ProviderScreen() {
                 </View>
               )}
 
+              {b.routeBand && (
+                <View style={s0.runBox}>
+                  <Text style={s0.runTitle}>🚚  The run</Text>
+                  <View style={s0.runRow}>
+                    <Text style={s0.runKey}>From</Text>
+                    <Text style={s0.runVal}>{b.fromLocality}</Text>
+                  </View>
+                  <View style={s0.runRow}>
+                    <Text style={s0.runKey}>To</Text>
+                    <Text style={s0.runVal}>{b.toLocality}</Text>
+                  </View>
+                  <View style={s0.runRow}>
+                    <Text style={s0.runKey}>Vehicle</Text>
+                    <Text style={s0.runVal}>
+                      {vehicleLabel(b.vehicleType)} · {bandLabel(b.routeBand)}
+                    </Text>
+                  </View>
+                  {!!b.loadNote && (
+                    <View style={s0.loadBox}>
+                      <Text style={s0.loadTxt}>{b.loadNote}</Text>
+                    </View>
+                  )}
+                  <Text style={s0.runNote}>
+                    Driving only. Anything else, agree it in the chat and add it as a
+                    line — you keep 95% of those.
+                  </Text>
+                </View>
+              )}
+
               {b.answers && Object.keys(b.answers).length > 0 && (
                 <View style={s0.answerBox}>
                   <Text style={s0.answerTitle}>📝  What they told us</Text>
@@ -480,7 +538,7 @@ export default function ProviderScreen() {
                   )}
                   {b.status==='pending_pool' && (
                     <View style={s0.poolBox}>
-                      <Text style={s0.poolTxt}>🌐  Open to all cleaners — first to accept gets it</Text>
+                      <Text style={s0.poolTxt}>🌐  Open to every available provider — first to accept gets it</Text>
                     </View>
                   )}
                   {b.pricingModel === 'quote' ? (
@@ -567,7 +625,7 @@ export default function ProviderScreen() {
               )}
 
               {b.status==='en_route' && (
-                b.pricingModel === 'fixed' ? (
+                isRoadside(b) ? (
                   <TouchableOpacity style={[s0.primaryBtn,isBusy&&s0.dis]} disabled={isBusy}
                     onPress={()=>doStatus(b.id,'in_progress')}>
                     <Text style={s0.whiteBtnTxt}>{isBusy?'…':'📍  Arrived — start work'}</Text>
@@ -608,7 +666,6 @@ export default function ProviderScreen() {
                   role="cleaner"
                   myId={userId}
                   otherName={clientNames[b.clientId || ''] || 'the client'}
-                  otherPhone={clientPhones[b.clientId || '']}
                 />
               )}
 
@@ -621,11 +678,13 @@ export default function ProviderScreen() {
                 />
               )}
 
-              {b.status==='in_progress' && b.pricingModel === 'fixed' && (
+              {b.status==='in_progress' && (isRoadside(b) || !hasChecklist(b)) && (
                 <>
                   <View style={s0.fixedWorking}>
                     <Text style={s0.fixedWorkingTxt}>
-                      🔧  Fixed-price job — no timer running. Finish the work and mark it done.
+                      🔧  {b.pricingModel === 'hourly'
+                        ? 'No task list on this one — finish the work and mark it done.'
+                        : 'Fixed price — no timer running. Finish the work and mark it done.'}
                     </Text>
                     <Text style={s0.fixedWorkingSub}>
                       If it needs parts beyond the standard fix, agree that with the client
@@ -639,7 +698,7 @@ export default function ProviderScreen() {
                 </>
               )}
 
-              {b.status==='in_progress' && b.pricingModel !== 'fixed' && (() => {
+              {b.status==='in_progress' && !isRoadside(b) && hasChecklist(b) && (() => {
                 const prog = listProgress(b.id);
                 const allDone = prog.total > 0 && prog.done === prog.total;
                 const items = checklist[b.id] || [];
@@ -884,6 +943,16 @@ const s0 = StyleSheet.create({
   infoItem:{flexDirection:'row',alignItems:'center',gap:6,backgroundColor:C.bg,paddingHorizontal:10,paddingVertical:6,borderRadius:10},
   infoIcon:{fontSize:14},
   infoTxt:{fontSize:13,color:C.text,fontWeight:'600'},
+  runBox:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:7,
+    borderWidth:1,borderColor:C.border},
+  runTitle:{fontSize:14,fontWeight:'800',color:C.primary},
+  runRow:{flexDirection:'row',gap:10},
+  runKey:{fontSize:12,color:C.muted,fontWeight:'700',width:64},
+  runVal:{fontSize:13,color:C.text,flex:1,fontWeight:'600'},
+  loadBox:{backgroundColor:C.white,borderRadius:10,padding:11,marginTop:3,
+    borderWidth:1,borderColor:C.border},
+  loadTxt:{fontSize:12,color:C.text,lineHeight:18},
+  runNote:{fontSize:11,color:C.text,lineHeight:16,marginTop:2},
   answerBox:{backgroundColor:C.primaryLt,borderRadius:12,padding:13,gap:5,
     borderWidth:1,borderColor:C.border},
   answerTitle:{fontSize:13,fontWeight:'800',color:C.primary},
@@ -925,6 +994,11 @@ const s0 = StyleSheet.create({
   primaryBtn:{backgroundColor:C.primary,borderRadius:12,paddingVertical:14,alignItems:'center'},
   whiteBtnTxt:{color:C.white,fontWeight:'700',fontSize:15},
   dis:{opacity:0.5},
+  errBanner:{flexDirection:'row',alignItems:'center',gap:10,marginHorizontal:20,
+    marginBottom:14,backgroundColor:C.redLt,borderRadius:12,padding:13,
+    borderWidth:1,borderColor:'#FECACA'},
+  errBannerTxt:{flex:1,fontSize:13,color:C.red,fontWeight:'600',lineHeight:18},
+  errBannerX:{fontSize:15,color:C.red,fontWeight:'800'},
   lockedBtn:{backgroundColor:C.bgAlt,borderRadius:12,paddingVertical:14,alignItems:'center',
     borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
   lockedTxt:{fontSize:13,fontWeight:'700',color:C.primary},
