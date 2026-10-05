@@ -11,7 +11,7 @@ import { loadServiceTypes, fixedQuote, type ServiceType } from '../lib/services'
 import { findTrade } from '../constants/trades';
 import { getCurrentLocation, reverseGeocode, mapsLink, type Coords } from '../lib/location';
 import ServiceQuestions from '../components/ServiceQuestions';
-import { missingAnswers } from '../lib/services';
+import { missingAnswers, answerAdjustments } from '../lib/services';
 
 const STEPS = ['Problem','Location','Vehicle','Confirm'];
 
@@ -38,11 +38,13 @@ export default function Roadside() {
 
   const type = types.find(t => t.id === svc) || null;
   const isQuoteJob = type?.pricing_model === 'quote';
-  const qs = (type?.questions || []) as any[];
+  const qs0 = (type?.questions || []) as any[];
+  const adj = answerAdjustments(qs0, answers);
+  const qs = qs0;
   const unanswered = missingAnswers(qs, answers);
   const p = type ? fixedQuote({
-    labourPrice: Number(type.labour_price ?? type.fixed_price) || 0,
-    partsPrice:  Number(type.parts_price) || 0,
+    labourPrice: (Number(type.labour_price ?? type.fixed_price) || 0) + adj.labour,
+    partsPrice:  (Number(type.parts_price) || 0) + adj.parts,
     calloutFee:  Number(type.callout_fee) || 0,
     urgent,
   }) : null;
@@ -310,8 +312,25 @@ export default function Roadside() {
               placeholderTextColor={C.muted} />
 
             {qs.length > 0 && (
-              <ServiceQuestions questions={qs} answers={answers}
-                onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+              <>
+                <ServiceQuestions questions={qs} answers={answers}
+                  onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+
+                {!isQuoteJob && adj.lines.length > 0 && p && (
+                  <View style={s.runningBox}>
+                    {adj.lines.map(x=>(
+                      <View key={x.label} style={s.runningRow}>
+                        <Text style={s.runningLbl}>{x.label}</Text>
+                        <Text style={s.runningVal}>+€{x.amount.toFixed(2)}</Text>
+                      </View>
+                    ))}
+                    <View style={s.runningTotal}>
+                      <Text style={s.runningTotalLbl}>Running total</Text>
+                      <Text style={s.runningTotalVal}>€{p.clientPays.toFixed(2)}</Text>
+                    </View>
+                  </View>
+                )}
+              </>
             )}
             <Text style={s.smallNote}>
               Optional, but it saves a phone call.
@@ -358,8 +377,9 @@ export default function Roadside() {
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Fixed price</Text>
               {[
-                ['Job',          `€${p.jobPrice.toFixed(2)}`],
-                ['Callout',      `€${p.calloutFee.toFixed(2)}`],
+                ['Job',          `€${(p.labour - adj.labour).toFixed(2)}`],
+                ...adj.lines.map(x=>[x.label, `€${x.amount.toFixed(2)}`]),
+                ['Callout',      `€${p.callout.toFixed(2)}`],
                 ...(p.urgentFee ? [['Immediate callout (25%)', `€${p.urgentFee.toFixed(2)}`]] : []),
                 ['VAT 18%',      `€${p.vat.toFixed(2)}`],
                 ['Card fee',     `€${p.stripeFee.toFixed(2)}`],
@@ -512,6 +532,15 @@ const s = StyleSheet.create({
   footerVal:{fontSize:20,fontWeight:'800',color:C.dark},
   footerStep:{fontSize:13,color:C.muted,fontWeight:'600'},
   footerQuote:{fontSize:16,fontWeight:'800',color:C.teal},
+  runningBox:{backgroundColor:C.white,borderRadius:12,padding:13,gap:6,marginTop:18,
+    borderWidth:1,borderColor:C.border},
+  runningRow:{flexDirection:'row',justifyContent:'space-between'},
+  runningLbl:{fontSize:12,color:C.muted},
+  runningVal:{fontSize:12,color:C.text,fontWeight:'700'},
+  runningTotal:{flexDirection:'row',justifyContent:'space-between',paddingTop:8,marginTop:2,
+    borderTopWidth:1,borderTopColor:C.border},
+  runningTotalLbl:{fontSize:13,fontWeight:'800',color:C.dark},
+  runningTotalVal:{fontSize:16,fontWeight:'800',color:C.amber},
   quoteCard:{backgroundColor:C.tealLt,borderRadius:16,padding:16,gap:8,marginBottom:14,
     borderWidth:1,borderColor:'#BAE6FD'},
   quoteTitle:{fontSize:15,fontWeight:'800',color:C.teal},

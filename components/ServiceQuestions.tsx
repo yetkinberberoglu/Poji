@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, TouchableOpacity, TextInput } from 'react-native';
 import { C } from '../constants/theme';
-import type { ServiceQuestion } from '../lib/services';
+import { optionLabel, optionDelta, type ServiceQuestion } from '../lib/services';
 
 /**
  * The handful of things a provider needs to know before setting off.
@@ -28,11 +28,16 @@ export default function ServiceQuestions({
           {q.type === 'choice' && q.options ? (
             <View style={s.chips}>
               {q.options.map(o=>{
-                const on = answers[q.id] === o;
+                const label = optionLabel(o);
+                const delta = optionDelta(o);
+                const on = answers[q.id] === label;
                 return (
-                  <TouchableOpacity key={o} style={[s.chip, on&&s.chipOn]}
-                    onPress={()=>onChange(q.id, on ? '' : o)}>
-                    <Text style={[s.chipTxt, on&&s.chipTxtOn]}>{o}</Text>
+                  <TouchableOpacity key={label} style={[s.chip, on&&s.chipOn]}
+                    onPress={()=>onChange(q.id, on ? '' : label)}>
+                    <Text style={[s.chipTxt, on&&s.chipTxtOn]}>{label}</Text>
+                    {delta > 0 && (
+                      <Text style={[s.chipDelta, on&&s.chipDeltaOn]}>+€{delta}</Text>
+                    )}
                   </TouchableOpacity>
                 );
               })}
@@ -59,10 +64,12 @@ const s = StyleSheet.create({
   optional:{fontSize:11,color:C.muted,fontWeight:'600'},
   chips:{flexDirection:'row',flexWrap:'wrap',gap:8},
   chip:{paddingHorizontal:14,paddingVertical:10,borderRadius:12,backgroundColor:C.white,
-    borderWidth:1.5,borderColor:C.border},
+    borderWidth:1.5,borderColor:C.border,alignItems:'center'},
   chipOn:{backgroundColor:C.primary,borderColor:C.primary},
   chipTxt:{fontSize:13,fontWeight:'600',color:C.muted},
   chipTxtOn:{color:C.white},
+  chipDelta:{fontSize:10,color:C.primary,fontWeight:'800',marginTop:2},
+  chipDeltaOn:{color:'#C7D2FE'},
   input:{backgroundColor:C.white,borderRadius:14,paddingHorizontal:16,paddingVertical:14,
     fontSize:15,color:C.text,borderWidth:1.5,borderColor:C.border},
 });

@@ -13,7 +13,7 @@ import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
   groupTasks, quote, fixedQuote, estimateHours,
-  loadServicePrices, effectiveService, missingAnswers,
+  loadServicePrices, effectiveService, missingAnswers, answerAdjustments,
   type ServiceType, type ServiceExtra, type PropertySize, type ProviderService
 } from '../lib/services';
 
@@ -167,9 +167,11 @@ export default function BookingScreen() {
 
   const myEff = effFor(pickedCleaner);
 
+  const adj = answerAdjustments(svcType?.questions as any, answers);
+
   const flatQuote = fixedQuote({
-    labourPrice: myEff?.labour ?? Number(svcType?.labour_price) ?? 0,
-    partsPrice:  myEff?.parts  ?? Number(svcType?.parts_price)  ?? 0,
+    labourPrice: (myEff?.labour ?? Number(svcType?.labour_price) ?? 0) + adj.labour,
+    partsPrice:  (myEff?.parts  ?? Number(svcType?.parts_price)  ?? 0) + adj.parts,
     calloutFee:  Number(svcType?.callout_fee) || 0,
   });
 
@@ -188,7 +190,10 @@ export default function BookingScreen() {
     }
 
     if (isFixed) {
-      const q = fixedQuote({ labourPrice: eff?.labour || 0, partsPrice: eff?.parts || 0 });
+      const q = fixedQuote({
+        labourPrice: (eff?.labour || 0) + adj.labour,
+        partsPrice:  (eff?.parts  || 0) + adj.parts,
+      });
       return { total: q.clientPays, label: fmtM(eff?.minutes || 60) };
     }
     const cMin = Math.max(svcMinHours, c.minHours ?? 2);
@@ -650,8 +655,25 @@ export default function BookingScreen() {
             {AddressBlock}
 
             {qs.length > 0 && (
-              <ServiceQuestions questions={qs} answers={answers}
-                onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+              <>
+                <ServiceQuestions questions={qs} answers={answers}
+                  onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+
+                {isFixed && adj.lines.length > 0 && (
+                  <View style={s.runningBox}>
+                    {adj.lines.map(x=>(
+                      <View key={x.label} style={s.runningRow}>
+                        <Text style={s.runningLbl}>{x.label}</Text>
+                        <Text style={s.runningVal}>+€{x.amount.toFixed(2)}</Text>
+                      </View>
+                    ))}
+                    <View style={s.runningTotal}>
+                      <Text style={s.runningTotalLbl}>Running total</Text>
+                      <Text style={s.runningTotalVal}>€{flatQuote.clientPays.toFixed(2)}</Text>
+                    </View>
+                  </View>
+                )}
+              </>
             )}
 
             <Text style={s.lbl}>Anything else they should know?</Text>
@@ -1015,10 +1037,14 @@ export default function BookingScreen() {
               {isFixed ? (
                 <>
                   {[
-                    ['Service charge', `€${flatQuote.labour.toFixed(2)}`],
+                    ['Service charge', `€${(flatQuote.labour - adj.labour).toFixed(2)}`],
+                    ...adj.lines.filter(x=>x.kind==='labour')
+                      .map(x=>[x.label, `€${x.amount.toFixed(2)}`]),
                     ...(flatQuote.callout > 0 ? [['Callout', `€${flatQuote.callout.toFixed(2)}`]] : []),
-                    ...(flatQuote.parts > 0
-                      ? [[svcType.parts_label || 'Parts', `€${flatQuote.parts.toFixed(2)}`]] : []),
+                    ...(flatQuote.parts - adj.parts > 0
+                      ? [[svcType.parts_label || 'Parts', `€${(flatQuote.parts - adj.parts).toFixed(2)}`]] : []),
+                    ...adj.lines.filter(x=>x.kind==='parts')
+                      .map(x=>[x.label, `€${x.amount.toFixed(2)}`]),
                     ['VAT 18%',   `€${flatQuote.vat.toFixed(2)}`],
                     ['Card fee',  `€${flatQuote.stripeFee.toFixed(2)}`],
                   ].map(([l,v])=>(
@@ -1366,6 +1392,15 @@ const s = StyleSheet.create({
     borderWidth:1,borderColor:'#FECACA'},
   failTitle:{fontSize:14,fontWeight:'800',color:C.red},
   failTxt:{fontSize:12,color:C.red,lineHeight:18},
+  runningBox:{backgroundColor:C.bgAlt,borderRadius:12,padding:13,gap:6,marginTop:18,
+    borderWidth:1,borderColor:C.border},
+  runningRow:{flexDirection:'row',justifyContent:'space-between'},
+  runningLbl:{fontSize:12,color:C.muted},
+  runningVal:{fontSize:12,color:C.text,fontWeight:'700'},
+  runningTotal:{flexDirection:'row',justifyContent:'space-between',paddingTop:8,marginTop:2,
+    borderTopWidth:1,borderTopColor:C.border},
+  runningTotalLbl:{fontSize:13,fontWeight:'800',color:C.dark},
+  runningTotalVal:{fontSize:16,fontWeight:'800',color:C.primary},
   holdBox:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:6,marginBottom:14,
     borderWidth:1,borderColor:C.border},
   holdTitle:{fontSize:14,fontWeight:'800',color:C.primary},

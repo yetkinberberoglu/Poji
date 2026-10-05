@@ -21,15 +21,56 @@ export type ServiceType = {
   questions?: ServiceQuestion[] | null;
 };
 
+/** An answer that changes the price */
+export type PricedOption = { label: string; delta: number };
+
 /** A question a service needs answered before anyone turns up */
 export type ServiceQuestion = {
   id: string;
   label: string;
   type: 'choice' | 'text';
-  options?: string[];
+  options?: (string | PricedOption)[];
   placeholder?: string;
   required?: boolean;
+  /** 'labour' adds to the work, 'parts' to the materials */
+  affects?: 'labour' | 'parts';
 };
+
+export const optionLabel = (o: string | PricedOption) =>
+  typeof o === 'string' ? o : o.label;
+
+export const optionDelta = (o: string | PricedOption) =>
+  typeof o === 'string' ? 0 : Number(o.delta) || 0;
+
+/**
+ * What the answers add to the price.
+ * Twenty litres of diesel costs more than five — the booking should say so
+ * before anyone agrees to it.
+ */
+export function answerAdjustments(
+  questions: ServiceQuestion[] | null | undefined,
+  answers: Record<string, string>,
+) {
+  let labour = 0, parts = 0;
+  const lines: { label: string; amount: number; kind: 'labour'|'parts' }[] = [];
+
+  (questions || []).forEach(q => {
+    if (!q.affects || !q.options) return;
+    const chosen = answers[q.id];
+    if (!chosen) return;
+    const opt = q.options.find(o => optionLabel(o) === chosen);
+    if (!opt) return;
+    const delta = optionDelta(opt);
+    if (!delta) return;
+
+    if (q.affects === 'parts') parts += delta;
+    else labour += delta;
+
+    lines.push({ label: optionLabel(opt), amount: delta, kind: q.affects });
+  });
+
+  return { labour: +labour.toFixed(2), parts: +parts.toFixed(2), lines };
+}
 
 /** Which required questions still have no answer */
 export function missingAnswers(

@@ -119,10 +119,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [myCategories, setMyCats] = useState<string[]>(['cleaning']);
 
   const loadCleaners = async () => {
+    // providers_public is the safe half of cleaner_profiles — no IBAN,
+    // no ID number, no documents. Clients never need those.
     const { data, error } = await supabase
-      .from('cleaner_profiles')
-      .select('*')
-      .eq('verification_status', 'approved');
+      .from('providers_public')
+      .select('*');
 
     if (error) { console.log('loadCleaners error:', error.message); return; }
 
@@ -329,9 +330,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     exclude?: string | null;
   }) => {
     const { data } = await supabase
-      .from('cleaner_profiles')
+      .from('providers_public')
       .select('id, categories, availability, notice_hours')
-      .eq('verification_status','approved')
       .eq('available', true);
 
     if (!data?.length) return [];
