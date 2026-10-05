@@ -66,6 +66,8 @@ export default function BookingScreen() {
 
   const [step, setStep]    = useState(0);
   const [loading, setLoad] = useState(false);
+  const [placed, setPlaced]= useState<any>(null);
+  const [failed, setFailed]= useState('');
 
   const [types, setTypes]   = useState<ServiceType[]>([]);
   const [extras, setExtras] = useState<ServiceExtra[]>([]);
@@ -261,26 +263,27 @@ export default function BookingScreen() {
   const confirm = async () => {
     if (!cleaner || !svcType) return;
     setLoad(true);
+    setFailed('');
     try {
       await addBooking({
         cleanerId: cleaner.id,
         address: address || '12 Tower Road, Sliema',
         date: date || iso(new Date()),
         time: time || '10:00',
-        hours: isFixed ? (Number(svcType.typical_minutes) || 60) / 60 : hours,
-        numCleaners: isFixed ? 1 : num,
-        propertyType: isFixed ? 'n/a' : size,
+        hours: isFixed ? (myEff?.minutes || 60) / 60 : hours,
+        numCleaners: (isFixed || isQuote) ? 1 : num,
+        propertyType: (isFixed || isQuote) ? 'n/a' : size,
         serviceType: svc,
         total,
         status: 'pending',
       } as any, {
-        multiplier: isFixed ? 1 : multiplier,
-        suppliesByCleaner: isFixed ? false : suppliesByCleaner,
-        hourlyRate: isFixed ? 0 : baseRate,
-        extraIds: isFixed ? [] : chosenExtras,
-        propertySize: isFixed ? 'n/a' : size,
-        estimatedMinutes: isFixed
-          ? (Number(svcType.typical_minutes) || 60)
+        multiplier: (isFixed || isQuote) ? 1 : multiplier,
+        suppliesByCleaner: (isFixed || isQuote) ? false : suppliesByCleaner,
+        hourlyRate: (isFixed || isQuote) ? 0 : baseRate,
+        extraIds: showExtras ? chosenExtras : [],
+        propertySize: (isFixed || isQuote) ? 'n/a' : size,
+        estimatedMinutes: (isFixed || isQuote)
+          ? (myEff?.minutes || 60)
           : est.totalMinutes,
         extrasForChecklist: selectedExtras,
         tradeId: svcType.trade_id || params.trade || null,
@@ -289,10 +292,20 @@ export default function BookingScreen() {
         partsTotal:  isFixed ? flatQuote.parts : 0,
         locationNote: notes.trim() || null,
       });
-      Alert.alert('✅ Booking Confirmed!','Your provider has been notified.',[
-        {text:'View Bookings', onPress:()=>router.replace('/(tabs)/bookings')},
-      ]);
-    } catch { Alert.alert('Error','Something went wrong. Please try again.'); }
+
+      setPlaced({
+        providerName: cleaner.name,
+        service: svcType.name,
+        icon: svcType.icon,
+        date, time, address,
+        total,
+        isQuote,
+      });
+    } catch (e: any) {
+      // Alert.alert does nothing on web, so say it on the page instead
+      console.error('Booking failed:', e);
+      setFailed(e?.message || e?.error_description || String(e) || 'Something went wrong');
+    }
     finally { setLoad(false); }
   };
 
@@ -354,6 +367,102 @@ export default function BookingScreen() {
       )}
     </>
   );
+
+  if (placed) {
+    return (
+      <ScrollView style={s.wrap} contentContainerStyle={{padding:24, paddingTop:70}}>
+        <View style={s.doneTop}>
+          <Text style={s.doneIcon}>{placed.isQuote ? '💬' : '✅'}</Text>
+          <Text style={s.doneTitle}>
+            {placed.isQuote ? 'Request sent' : 'Request sent'}
+          </Text>
+          <Text style={s.doneSub}>
+            {placed.providerName.split(' ')[0]} has been notified on WhatsApp.
+            {placed.isQuote
+              ? " They'll message you to understand the job, then send a price."
+              : " You'll hear back as soon as they accept — usually within the hour."}
+          </Text>
+        </View>
+
+        <View style={s.doneCard}>
+          {[
+            ['Service', `${placed.icon || ''} ${placed.service}`],
+            ['Provider', placed.providerName],
+            ['Date', placed.date
+              ? new Date(placed.date+'T00:00:00').toLocaleDateString('en-GB',
+                  {weekday:'long', day:'numeric', month:'long'})
+              : '—'],
+            ['Time', placed.time || '—'],
+            ['Address', placed.address || '—'],
+          ].map(([l,v])=>(
+            <View key={String(l)} style={s.doneRow}>
+              <Text style={s.doneLbl}>{l}</Text>
+              <Text style={s.doneVal}>{v}</Text>
+            </View>
+          ))}
+          {!placed.isQuote && (
+            <View style={s.doneTotalRow}>
+              <Text style={s.doneTotalLbl}>
+                {isFixed ? 'Agreed price' : 'Estimated'}
+              </Text>
+              <Text style={s.doneTotalVal}>€{Number(placed.total).toFixed(2)}</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={s.payBox}>
+          <Text style={s.payTitle}>💳  Nothing has been charged</Text>
+          <Text style={s.payTxt}>
+            Your card is only held, not debited. The money moves to your provider
+            after the work is done and you approve it.
+          </Text>
+          <View style={s.paySteps}>
+            {[
+              ['Now',          'Card held. No money taken.'],
+              ['They accept',  'You get a message and a PIN for the day.'],
+              ['Work is done', 'You see what was done and approve it.'],
+              ['Then',         'Payment is released. Six hours and it approves itself.'],
+            ].map(([a,b])=>(
+              <View key={a} style={s.payRow}>
+                <Text style={s.payDot}>•</Text>
+                <View style={{flex:1}}>
+                  <Text style={s.payA}>{a}</Text>
+                  <Text style={s.payB}>{b}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={s.cancelBox}>
+          <Text style={s.cancelTitle}>Changed your mind?</Text>
+          {[
+            ['Before they accept',            'Free — cancel from your bookings'],
+            ['More than 12 hours before',     'Free'],
+            ['Less than 12 hours before',     'Up to one hour at their rate'],
+            ['Nobody home when they arrive',  'The callout is chargeable'],
+          ].map(([a,b])=>(
+            <View key={a} style={s.cancelRow}>
+              <Text style={s.cancelA}>{a}</Text>
+              <Text style={s.cancelB}>{b}</Text>
+            </View>
+          ))}
+        </View>
+
+        <TouchableOpacity style={s.doneBtn}
+          onPress={()=>router.replace('/(tabs)/bookings')}>
+          <Text style={s.doneBtnTxt}>View my booking</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.doneGhost}
+          onPress={()=>router.replace('/(tabs)/home')}>
+          <Text style={s.doneGhostTxt}>Back to home</Text>
+        </TouchableOpacity>
+
+        <View style={{height:40}}/>
+      </ScrollView>
+    );
+  }
 
   return (
     <View style={s.wrap}>
@@ -930,6 +1039,21 @@ export default function BookingScreen() {
               </TouchableOpacity>
             )}
 
+            {failed ? (
+              <View style={s.failBox}>
+                <Text style={s.failTitle}>⚠️  Couldn't send that</Text>
+                <Text style={s.failTxt}>{failed}</Text>
+              </View>
+            ) : null}
+
+            <View style={s.holdBox}>
+              <Text style={s.holdTitle}>💳  Your card is held, not charged</Text>
+              <Text style={s.holdTxt}>
+                Money only moves after the work is done and you approve it. If nobody
+                accepts, the hold is released.
+              </Text>
+            </View>
+
             <View style={s.finalBox}>
               <Text style={s.finalTitle}>
                 {isQuote ? '💬  Nothing is agreed yet'
@@ -1008,7 +1132,7 @@ export default function BookingScreen() {
               {!canContinue ? blockedMsg
                 : stepName === 'Extras' && chosenExtras.length===0 ? 'Skip  →'
                 : step<STEPS.length-1 ? 'Continue  →'
-                : isQuote ? '💬  Send request' : '✓  Confirm & Pay'}
+                : isQuote ? '💬  Send request' : '✓  Confirm booking'}
             </Text>}
         </TouchableOpacity>
       </View>
@@ -1214,6 +1338,52 @@ const s = StyleSheet.create({
   finalBox:{backgroundColor:C.greenLt,borderRadius:14,padding:16,gap:8,borderWidth:1,borderColor:'#A7F3D0'},
   finalTitle:{fontSize:14,fontWeight:'800',color:C.green},
   finalTxt:{fontSize:12,color:C.text,lineHeight:18},
+
+  failBox:{backgroundColor:C.redLt,borderRadius:14,padding:14,gap:5,marginBottom:14,
+    borderWidth:1,borderColor:'#FECACA'},
+  failTitle:{fontSize:14,fontWeight:'800',color:C.red},
+  failTxt:{fontSize:12,color:C.red,lineHeight:18},
+  holdBox:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:6,marginBottom:14,
+    borderWidth:1,borderColor:C.border},
+  holdTitle:{fontSize:14,fontWeight:'800',color:C.primary},
+  holdTxt:{fontSize:12,color:C.text,lineHeight:18},
+
+  doneTop:{alignItems:'center',gap:10,marginBottom:22},
+  doneIcon:{fontSize:56},
+  doneTitle:{fontSize:26,fontWeight:'800',color:C.dark},
+  doneSub:{fontSize:14,color:C.muted,textAlign:'center',lineHeight:21},
+  doneCard:{backgroundColor:C.white,borderRadius:16,padding:16,marginBottom:14,
+    borderWidth:1,borderColor:C.border,...S.sm},
+  doneRow:{flexDirection:'row',justifyContent:'space-between',paddingVertical:8,
+    borderBottomWidth:1,borderBottomColor:C.bg,gap:12},
+  doneLbl:{fontSize:13,color:C.muted,fontWeight:'600'},
+  doneVal:{fontSize:13,color:C.text,fontWeight:'600',flex:1,textAlign:'right'},
+  doneTotalRow:{flexDirection:'row',justifyContent:'space-between',paddingTop:12,marginTop:4,
+    borderTopWidth:1,borderTopColor:C.border},
+  doneTotalLbl:{fontSize:15,fontWeight:'700',color:C.dark},
+  doneTotalVal:{fontSize:20,fontWeight:'800',color:C.primary},
+
+  payBox:{backgroundColor:C.primaryLt,borderRadius:16,padding:16,gap:10,marginBottom:14,
+    borderWidth:1,borderColor:C.border},
+  payTitle:{fontSize:15,fontWeight:'800',color:C.primary},
+  payTxt:{fontSize:13,color:C.text,lineHeight:19},
+  paySteps:{gap:9,marginTop:2},
+  payRow:{flexDirection:'row',gap:10},
+  payDot:{fontSize:14,color:C.primary,fontWeight:'800'},
+  payA:{fontSize:13,fontWeight:'700',color:C.text},
+  payB:{fontSize:12,color:C.muted,marginTop:2,lineHeight:16},
+
+  cancelBox:{backgroundColor:C.white,borderRadius:16,padding:16,gap:4,marginBottom:20,
+    borderWidth:1,borderColor:C.border},
+  cancelTitle:{fontSize:14,fontWeight:'800',color:C.dark,marginBottom:6},
+  cancelRow:{flexDirection:'row',justifyContent:'space-between',paddingVertical:6,gap:12},
+  cancelA:{fontSize:12,color:C.text,flex:1},
+  cancelB:{fontSize:12,color:C.muted,fontWeight:'600',textAlign:'right'},
+
+  doneBtn:{backgroundColor:C.primary,borderRadius:16,paddingVertical:17,alignItems:'center',...S.md},
+  doneBtnTxt:{color:C.white,fontSize:16,fontWeight:'700'},
+  doneGhost:{paddingVertical:14,alignItems:'center'},
+  doneGhostTxt:{color:C.muted,fontSize:14,fontWeight:'600'},
 
   footer:{flexDirection:'row',alignItems:'center',paddingHorizontal:20,paddingVertical:16,backgroundColor:C.white,borderTopWidth:1,borderTopColor:C.border,gap:16},
   footerLbl:{fontSize:11,color:C.muted},
