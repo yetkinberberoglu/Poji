@@ -42,7 +42,7 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
 };
 
 export default function ProviderScreen() {
-  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, loadBookings, userName, userId, myCategories, sendQuote } = useApp();
+  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, hideBooking, loadBookings, userName, userId, myCategories, sendQuote } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy]             = useState<string|null>(null);
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
@@ -58,6 +58,18 @@ export default function ProviderScreen() {
     }
     setBusy(null);
   };
+
+  const [serviceTypes, setServiceTypes] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('service_types')
+        .select('id, name, icon, pricing_model');
+      const map: Record<string, any> = {};
+      (data || []).forEach((t:any) => { map[t.id] = t; });
+      setServiceTypes(map);
+    })();
+  }, []);
 
   const [clientNames, setClientNames]   = useState<Record<string,string>>({});
   const [clientPhones, setClientPhones] = useState<Record<string,string>>({});
@@ -187,15 +199,27 @@ export default function ProviderScreen() {
   };
 
   const doAccept = async (id: string) => {
-    setBusy(id);
-    const ok = await acceptJob(id, userId);
+    setBusy(id); setActionError('');
+    try {
+      const ok = await acceptJob(id, userId);
+      if (!ok) {
+        setActionError('Somebody got there first — that job has gone.');
+        await loadBookings();
+      }
+    } catch (e: any) {
+      setActionError(e?.message || 'Could not accept that job');
+    }
     setBusy(null);
-    if (!ok) await loadBookings();
   };
 
   const doStatus = async (id: string, status: string, address?: string) => {
-    setBusy(id); await updateStatus(id, status);
-    if (status === 'en_route' && address) openDirections(address);
+    setBusy(id); setActionError('');
+    try {
+      await updateStatus(id, status);
+      if (status === 'en_route' && address) openDirections(address);
+    } catch (e: any) {
+      setActionError(e?.message || 'That did not go through');
+    }
     setBusy(null);
   };
 
@@ -403,14 +427,16 @@ export default function ProviderScreen() {
             <View style={s0.cardBody}>
               <View style={s0.infoGrid}>
                 {[['📅',prettyDate(b.date)],['🕐',b.time],['⏱',`${b.hours}h`],
-                  ['🧹',(b.serviceType||'standard').replace('_',' ')]].map(([i,v])=>(
+                  [serviceTypes[b.serviceType]?.icon || '🧰',
+                   serviceTypes[b.serviceType]?.name
+                     || (b.serviceType||'standard').replace(/_/g,' ')]].map(([i,v])=>(
                   <View key={String(v)} style={s0.infoItem}>
                     <Text style={s0.infoIcon}>{i}</Text><Text style={s0.infoTxt}>{v}</Text>
                   </View>
                 ))}
               </View>
 
-              {b.pricingModel === 'fixed' && (
+              {isRoadside(b) && (
                 <View style={s0.roadBox}>
                   <View style={s0.roadHead}>
                     <Text style={s0.roadTitle}>
@@ -507,7 +533,7 @@ export default function ProviderScreen() {
                   <Text style={s0.addressIcon}>📍</Text>
                   <Text style={s0.addressTxt}>{b.address}</Text>
                 </View>
-                {b.pricingModel !== 'fixed' && (
+                {!isRoadside(b) && (
                   <View style={s0.mapButtons}>
                     <TouchableOpacity style={s0.mapBtn} onPress={()=>openMap(b.address)}>
                       <Text style={s0.mapBtnTxt}>🗺  View Map</Text>
@@ -521,7 +547,7 @@ export default function ProviderScreen() {
 
               <View style={s0.earningsRow}>
                 <Text style={s0.earningsKey}>
-                  {b.pricingModel === 'fixed' ? 'You get (fixed)' : 'Your earnings'}
+                  {b.pricingModel === 'hourly' ? 'Your earnings' : 'You get (fixed)'}
                 </Text>
                 <Text style={s0.earningsAmt}>€{pay}</Text>
               </View>
@@ -813,7 +839,7 @@ export default function ProviderScreen() {
 
               {b.status==='awaiting_confirmation' && (
                 <View style={s0.waitBox}>
-                  {b.pricingModel === 'fixed' && (
+                  {b.pricingModel !== 'hourly' && (
                     <View style={s0.settleBox}>
                       <View style={s0.settleRow}>
                         <Text style={s0.settleLbl}>Agreed price</Text>
@@ -823,7 +849,7 @@ export default function ProviderScreen() {
                       </View>
                     </View>
                   )}
-                  {b.pricingModel !== 'fixed' && b.actualMinutes != null && (
+                  {b.pricingModel === 'hourly' && b.actualMinutes != null && (
                     <View style={s0.settleBox}>
                       <View style={s0.settleRow}>
                         <Text style={s0.settleLbl}>Time worked</Text>
@@ -884,6 +910,9 @@ export default function ProviderScreen() {
                         ? `€${Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)).toFixed(2)}`
                         : st.label}
                     </Text>
+                    <TouchableOpacity onPress={()=>hideBooking(b.id, 'provider')}>
+                      <Text style={s0.clearLink}>Clear</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               </View>
@@ -893,10 +922,36 @@ export default function ProviderScreen() {
       )}
 
       {myStatus === 'approved' && bookings.length===0 && (
-        <View style={s0.empty}>
-          <Text style={s0.emptyIcon}>📋</Text>
-          <Text style={s0.emptyTxt}>No jobs yet</Text>
-          <Text style={s0.emptySub}>Pull down to refresh</Text>
+        <View style={s0.waitCard}>
+          <Text style={s0.waitIcon}>🌱</Text>
+          <Text style={s0.waitTitle}>You're live and waiting</Text>
+          <Text style={s0.waitTxt}>
+            Poji is new in Malta and we're bringing clients on now. You'll get a
+            WhatsApp and a notification the moment something in your trades comes up.
+          </Text>
+
+          <View style={s0.waitList}>
+            <Text style={s0.waitListTitle}>While you wait, these get you picked first</Text>
+            {[
+              ['Prices set', 'Clients compare providers side by side'],
+              ['A clear photo', 'People book a face, not two initials'],
+              ['A few honest lines', 'Say what you are good at and how long you have done it'],
+              ['Your hours right', 'You only hear about jobs you can actually take'],
+            ].map(([a,b])=>(
+              <View key={a} style={s0.waitRow}>
+                <Text style={s0.waitDot}>•</Text>
+                <View style={{flex:1}}>
+                  <Text style={s0.waitA}>{a}</Text>
+                  <Text style={s0.waitB}>{b}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          <TouchableOpacity style={s0.waitBtn}
+            onPress={()=>router.push('/(provider)/profile')}>
+            <Text style={s0.waitBtnTxt}>Check my profile</Text>
+          </TouchableOpacity>
         </View>
       )}
       <View style={{height:40}}/>
@@ -1002,6 +1057,22 @@ const s0 = StyleSheet.create({
   lockedBtn:{backgroundColor:C.bgAlt,borderRadius:12,paddingVertical:14,alignItems:'center',
     borderWidth:1.5,borderStyle:'dashed',borderColor:C.border},
   lockedTxt:{fontSize:13,fontWeight:'700',color:C.primary},
+  clearLink:{fontSize:10,color:C.muted,fontWeight:'600',marginTop:3},
+  waitCard:{marginHorizontal:20,marginBottom:20,backgroundColor:C.white,borderRadius:20,
+    padding:20,gap:10,borderWidth:1,borderColor:C.border,...S.sm},
+  waitIcon:{fontSize:40,textAlign:'center'},
+  waitTitle:{fontSize:18,fontWeight:'800',color:C.dark,textAlign:'center'},
+  waitTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
+  waitList:{backgroundColor:C.bg,borderRadius:14,padding:14,gap:9,marginTop:6,
+    borderWidth:1,borderColor:C.border},
+  waitListTitle:{fontSize:12,fontWeight:'800',color:C.dark,marginBottom:2},
+  waitRow:{flexDirection:'row',gap:9},
+  waitDot:{fontSize:13,color:C.primary,fontWeight:'800'},
+  waitA:{fontSize:12,fontWeight:'700',color:C.text},
+  waitB:{fontSize:11,color:C.muted,marginTop:1,lineHeight:16},
+  waitBtn:{backgroundColor:C.primary,borderRadius:14,paddingVertical:14,
+    alignItems:'center',marginTop:4},
+  waitBtnTxt:{fontSize:14,fontWeight:'700',color:C.white},
   gateCard:{marginHorizontal:20,marginBottom:20,backgroundColor:C.white,borderRadius:20,
     padding:20,gap:10,borderWidth:1,borderColor:C.border,...S.sm},
   gateIcon:{fontSize:40,textAlign:'center'},

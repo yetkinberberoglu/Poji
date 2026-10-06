@@ -116,7 +116,7 @@ export default function Profile() {
         ]},
         {title:'Support', items:[
           {icon:'💬',label:'Help & FAQ',sub:'Common questions'},
-          {icon:'📧',label:'Contact Us',sub:'support@poji.mt'},
+          {icon:'📧',label:'Contact Us',sub:'support@po-ji.com'},
           {icon:'⭐',label:'Rate the App',sub:'Love Poji?'},
         ]},
       ].map(section=>(

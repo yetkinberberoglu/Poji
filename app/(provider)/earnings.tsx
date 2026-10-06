@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase';
 import { C, S } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
 import { fmtDuration } from '../../lib/services';
+import PlatformFeedback from '../../components/PlatformFeedback';
 
 const money = (n:number) => '€' + (Number(n)||0).toFixed(2);
 
@@ -142,6 +143,8 @@ export default function Earnings() {
           behalf and pays you after the client approves the work.
         </Text>
       </View>
+
+      <PlatformFeedback role="cleaner" jobsDone={stats.jobs} />
 
       <Text style={s.sectionTitle}>
         {history.length > 0 ? 'Recent jobs' : 'Nothing yet'}

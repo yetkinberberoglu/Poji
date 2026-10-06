@@ -9,6 +9,7 @@ import { useApp } from '../context/AppContext';
 import Avatar from '../components/Avatar';
 import { canTakeJob } from '../lib/availability';
 import ServiceQuestions from '../components/ServiceQuestions';
+import PromoField from '../components/PromoField';
 import Picker from '../components/Picker';
 import {
   ALL_LOCALITIES, VEHICLES, bandFor, bandLabel, vehicleLabel,
@@ -93,6 +94,7 @@ export default function BookingScreen() {
   const [toLoc, setToLoc]         = useState('');
   const [vehicle, setVehicle]     = useState('');
   const [loadNote, setLoadNote]   = useState('');
+  const [promo, setPromo]         = useState<any>(null);
   const [savedAddr, setSavedAddr] = useState<{line:string; locality:string}|null>(null);
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
@@ -204,10 +206,14 @@ export default function BookingScreen() {
 
   const transportQuote = fixedQuote({ labourPrice: myRoutePrice || 0, partsPrice: 0 });
 
-  const total = isQuote ? 0
+  const grossTotal = isQuote ? 0
     : isTransport ? transportQuote.clientPays
     : isFixed ? flatQuote.clientPays
     : hourlyQuote.clientPays;
+
+  // A discount is ours, not the provider's — they are paid in full either way
+  const discount = promo ? Math.min(Number(promo.discount), grossTotal) : 0;
+  const total = +(grossTotal - discount).toFixed(2);
 
   /** What this provider would charge for this exact job */
   const quoteFor = (c: any) => {
@@ -349,6 +355,8 @@ export default function BookingScreen() {
         vehicleType:  isTransport ? vehicle : null,
         routeBand:    isTransport ? band : null,
         loadNote:     isTransport ? loadNote.trim() : null,
+        promoCode:    promo?.code || null,
+        discount,
       });
 
       setPlaced({
@@ -1180,10 +1188,7 @@ export default function BookingScreen() {
                       <Text style={s.priceVal}>{v}</Text>
                     </View>
                   ))}
-                  <View style={s.totalRow}>
-                    <Text style={s.totalLbl}>Total</Text>
-                    <Text style={s.totalVal}>€{transportQuote.clientPays.toFixed(2)}</Text>
-                  </View>
+
                 </>
               ) : isFixed ? (
                 <>
@@ -1204,9 +1209,15 @@ export default function BookingScreen() {
                       <Text style={s.priceVal}>{v}</Text>
                     </View>
                   ))}
+                  {discount > 0 && (
+                    <View style={s.priceRow}>
+                      <Text style={[s.priceLbl,{color:C.green}]}>{promo.code}</Text>
+                      <Text style={[s.priceVal,{color:C.green}]}>−€{discount.toFixed(2)}</Text>
+                    </View>
+                  )}
                   <View style={s.totalRow}>
                     <Text style={s.totalLbl}>Total</Text>
-                    <Text style={s.totalVal}>€{flatQuote.clientPays.toFixed(2)}</Text>
+                    <Text style={s.totalVal}>€{total.toFixed(2)}</Text>
                   </View>
                 </>
               ) : (
@@ -1224,10 +1235,7 @@ export default function BookingScreen() {
                       <Text style={s.priceVal}>{v}</Text>
                     </View>
                   ))}
-                  <View style={s.totalRow}>
-                    <Text style={s.totalLbl}>Estimated total</Text>
-                    <Text style={s.totalVal}>€{hourlyQuote.clientPays.toFixed(2)}</Text>
-                  </View>
+
                 </>
               )}
             </View>
@@ -1245,6 +1253,15 @@ export default function BookingScreen() {
                 <Text style={s.failTxt}>{failed}</Text>
               </View>
             ) : null}
+
+            {!isQuote && (
+              <PromoField
+                total={grossTotal}
+                applied={promo}
+                onApply={setPromo}
+                onClear={()=>setPromo(null)}
+              />
+            )}
 
             <View style={s.holdBox}>
               <Text style={s.holdTitle}>💳  Your card is held, not charged</Text>

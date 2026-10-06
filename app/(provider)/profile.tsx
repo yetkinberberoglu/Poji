@@ -26,6 +26,8 @@ export default function ProviderProfile() {
   const [loading, setLoad]  = useState(true);
   const [photoUrl, setPhotoUrl] = useState<string|null>(null);
   const [standing, setStanding] = useState<any>(null);
+  const [founding, setFounding] = useState<any>(null);
+  const [noShows, setNoShows]   = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -36,6 +38,11 @@ export default function ProviderProfile() {
         .eq('id', user.id).maybeSingle();
       if (data && (data.violation_count || data.outstanding_fines || data.suspended_until))
         setStanding(data);
+
+      const { data: cp } = await supabase.from('cleaner_profiles')
+        .select('founding_member, commission_free_until, no_show_count').eq('id', user.id).maybeSingle();
+      if (cp?.founding_member || cp?.commission_free_until) setFounding(cp);
+      if (cp?.no_show_count) setNoShows(cp.no_show_count);
     })();
   }, []);
 
@@ -222,6 +229,47 @@ export default function ProviderProfile() {
           </View>
           <Text style={s.verifyGo}>›</Text>
         </TouchableOpacity>
+      )}
+
+      {founding && (() => {
+        const until = founding.commission_free_until
+          ? new Date(founding.commission_free_until) : null;
+        const live = until && until >= new Date();
+        return (
+          <View style={s.foundCard}>
+            <Text style={s.foundBadge}>⭐  Founding provider</Text>
+            <Text style={s.foundTitle}>
+              {live ? 'No commission until '
+                + until!.toLocaleDateString('en-GB', {day:'numeric', month:'long'})
+                : 'Thanks for being here early'}
+            </Text>
+            <Text style={s.foundTxt}>
+              {live
+                ? 'You keep everything you earn until then. After that the usual 20% applies, and you keep the badge.'
+                : 'Your founding badge stays on your profile. Clients see you were one of the first.'}
+            </Text>
+          </View>
+        );
+      })()}
+
+      {noShows > 0 && (
+        <View style={s.noShowCard}>
+          <Text style={s.noShowTitle}>
+            {noShows === 1 ? '⚠️  One client said you didn\u2019t arrive'
+              : `⚠️  ${noShows} clients said you didn\u2019t arrive`}
+          </Text>
+          <Text style={s.noShowTxt}>
+            {noShows === 1
+              ? "It happens — a van breaks down, a job overruns. Message the client when it does and most will wait. Two more and your account is suspended."
+              : noShows === 2
+              ? "This is the second time. One more and your account is suspended for thirty days. If something is going wrong, tell us before it does."
+              : "Your account is at risk. Anyone who can't make a job needs to say so in the app before the time passes."}
+          </Text>
+          <Text style={s.noShowHint}>
+            Can't make one? Open the job and offer another time — clients almost
+            always take it.
+          </Text>
+        </View>
       )}
 
       {/* ── availability ── */}
@@ -691,6 +739,16 @@ const s = StyleSheet.create({
     borderWidth:1,borderColor:'#FECACA'},
   errTxt:{fontSize:13,color:C.red,fontWeight:'600'},
 
+  noShowCard:{marginHorizontal:20,marginTop:18,backgroundColor:C.redLt,borderRadius:16,
+    padding:16,gap:7,borderWidth:1.5,borderColor:'#FECACA'},
+  noShowTitle:{fontSize:15,fontWeight:'800',color:C.red,lineHeight:20},
+  noShowTxt:{fontSize:12,color:C.text,lineHeight:18},
+  noShowHint:{fontSize:11,color:C.muted,lineHeight:16},
+  foundCard:{marginHorizontal:20,marginTop:18,backgroundColor:C.amberLt,borderRadius:16,
+    padding:16,gap:6,borderWidth:1.5,borderColor:'#FDE68A'},
+  foundBadge:{fontSize:12,fontWeight:'800',color:C.amber,letterSpacing:0.4},
+  foundTitle:{fontSize:16,fontWeight:'800',color:C.dark},
+  foundTxt:{fontSize:12,color:C.text,lineHeight:18},
   verifyCard:{flexDirection:'row',alignItems:'center',gap:12,marginHorizontal:20,marginTop:18,
     backgroundColor:C.primaryLt,borderRadius:16,padding:16,borderWidth:1.5,borderColor:C.primary},
   verifyIcon:{fontSize:24},

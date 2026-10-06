@@ -46,7 +46,7 @@ const DISPUTE_REASONS = [
 ];
 
 export default function Bookings() {
-  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, respondToQuote, loadBookings } = useApp();
+  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, respondToQuote, hideBooking, reportNoShow, loadBookings } = useApp();
   const [refreshing, setRefreshing]   = useState(false);
   const [busy, setBusy]               = useState<string|null>(null);
   const [disputeFor, setDisputeFor]   = useState<string|null>(null);
@@ -56,6 +56,59 @@ export default function Bookings() {
   const [checklist, setChecklist]     = useState<Record<string, any[]>>({});
   const [openList, setOpenList]       = useState<string|null>(null);
   const [actionError, setActionError] = useState('');
+  const [cancelFor, setCancelFor]     = useState<string|null>(null);
+  const [serviceTypes, setServiceTypes] = useState<Record<string, any>>({});
+  const [apology, setApology]           = useState<string|null>(null);
+
+  /** How late is this, in minutes? Negative means it hasn't started yet. */
+  const minutesLate = (b: any) => {
+    if (!b.date || !b.time) return -1;
+    const start = new Date(`${b.date}T${b.time}:00`);
+    if (isNaN(start.getTime())) return -1;
+    return Math.floor((Date.now() - start.getTime()) / 60000);
+  };
+
+  const doNoShow = async (id: string) => {
+    setBusy(id); setActionError('');
+    try {
+      const code = await reportNoShow(id);
+      if (code) setApology(code);
+    } catch (e: any) {
+      setActionError(e?.message || 'Could not report that');
+    }
+    setBusy(null);
+  };
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('service_types').select('id, name, icon');
+      const map: Record<string, any> = {};
+      (data || []).forEach((t:any) => { map[t.id] = t; });
+      setServiceTypes(map);
+    })();
+  }, []);
+
+  /** What cancelling this booking costs, in plain words */
+  const cancelTerms = (b: any) => {
+    if (['pending','pending_pool','quoted','reschedule_proposed'].includes(b.status)) {
+      return { fee:'Free', why:'Nobody has accepted it yet.' };
+    }
+    const start = new Date(`${b.date}T${b.time || '00:00'}:00`);
+    const hours = (start.getTime() - Date.now()) / 3600000;
+    if (isNaN(hours)) return { fee:'Free', why:'' };
+    if (hours >= 12) return { fee:'Free', why:'More than 12 hours before the job.' };
+    return {
+      fee:'Up to one hour at their rate',
+      why:'Less than 12 hours before the job, so they may charge for the slot they held.',
+    };
+  };
+
+  const doCancel = async (id: string) => {
+    setBusy(id); setActionError('');
+    try { await updateStatus(id, 'cancelled'); }
+    catch (e: any) { setActionError(e?.message || 'Could not cancel that'); }
+    setBusy(null); setCancelFor(null);
+  };
 
   const loadChecklist = async (bookingId: string) => {
     const { data } = await supabase.from('booking_checklist')
@@ -122,6 +175,26 @@ export default function Bookings() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary}/>}>
       <Text style={st.heading}>My Bookings</Text>
 
+      {apology ? (
+        <View style={st.sorryBox}>
+          <Text style={st.sorryTitle}>That shouldn't have happened</Text>
+          <Text style={st.sorryTxt}>
+            You've been charged nothing, and the hold on your card is released.
+            We've put it on their record.
+          </Text>
+          <View style={st.sorryCode}>
+            <Text style={st.sorryCodeTxt}>{apology}</Text>
+          </View>
+          <Text style={st.sorryTxt}>
+            10% off your next booking, for the time you lost. It's yours alone and
+            lasts three months.
+          </Text>
+          <TouchableOpacity onPress={()=>setApology(null)}>
+            <Text style={st.sorryClose}>Got it</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {actionError ? (
         <View style={st.errBanner}>
           <Text style={st.errBannerTxt}>⚠️  {actionError}</Text>
@@ -159,7 +232,15 @@ export default function Bookings() {
                 </View>
                 <View style={{flex:1}}>
                   <Text style={st.cleanerName}>{cleaner?.name||'Cleaner'}</Text>
-                  <Text style={st.cleanerSub}>{b.numCleaners} cleaner · {b.hours}h · {prettyDate(b.date)} at {b.time}</Text>
+                  <Text style={st.cleanerSub}>
+                    {serviceTypes[b.serviceType]
+                      ? `${serviceTypes[b.serviceType].icon} ${serviceTypes[b.serviceType].name}`
+                      : 'Service'}
+                  </Text>
+                  <Text style={st.cleanerSub}>
+                    {prettyDate(b.date)} at {b.time}
+                    {b.pricingModel === 'hourly' ? ` · ${b.hours}h × ${b.numCleaners}` : ''}
+                  </Text>
                 </View>
                 <View style={{alignItems:'flex-end'}}>
                   <Text style={st.price}>€{Number(b.finalTotal ?? b.total).toFixed(2)}</Text>
@@ -233,7 +314,7 @@ export default function Bookings() {
                             </Text>
                           </TouchableOpacity>
                           <TouchableOpacity style={st.pickBtn}
-                            onPress={()=>updateStatus(b.id,'cancelled')}>
+                            onPress={()=>setCancelFor(b.id)}>
                             <Text style={st.pickBtnTxt}>Cancel this request</Text>
                           </TouchableOpacity>
                         </View>
@@ -543,17 +624,104 @@ export default function Bookings() {
                 </View>
               )}
 
-              {['pending','pending_pool','reschedule_proposed','accepted'].includes(b.status) && (
-                <TouchableOpacity style={st.cancelBooking} onPress={()=>updateStatus(b.id,'cancelled')}>
+              {cancelFor === b.id && (() => {
+                const t = cancelTerms(b);
+                return (
+                  <View style={st.cancelBox}>
+                    <Text style={st.cancelTitle}>Cancel this booking?</Text>
+                    <View style={st.cancelRow}>
+                      <Text style={st.cancelKey}>What it costs</Text>
+                      <Text style={st.cancelVal}>{t.fee}</Text>
+                    </View>
+                    {!!t.why && <Text style={st.cancelWhy}>{t.why}</Text>}
+                    <View style={st.row}>
+                      <TouchableOpacity style={st.keepBtn} onPress={()=>setCancelFor(null)}>
+                        <Text style={st.keepTxt}>Keep it</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[st.confirmCancelBtn, isBusy&&st.dis]}
+                        disabled={isBusy} onPress={()=>doCancel(b.id)}>
+                        <Text style={st.whiteTxt}>{isBusy?'…':'Yes, cancel'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })()}
+
+              {['accepted','en_route'].includes(b.status) && (() => {
+                const late = minutesLate(b);
+                if (late < 15) return null;
+                const hrs = Math.floor(late / 60);
+                return (
+                  <View style={st.lateBox}>
+                    <Text style={st.lateTitle}>
+                      ⚠️  {cleaner?.name?.split(' ')[0] || 'Your provider'} should
+                      have been here by now
+                    </Text>
+                    <Text style={st.lateTxt}>
+                      {hrs >= 1
+                        ? `It's over ${hrs} hour${hrs>1?'s':''} past ${b.time}`
+                        : `It's ${late} minutes past ${b.time}`}
+                      {b.status === 'en_route'
+                        ? ', though they did set off.'
+                        : " and they haven't set off."}
+                    </Text>
+                    <Text style={st.lateTxt}>
+                      Message them first — traffic and overruns happen. If you've
+                      had no answer, cancel at no cost and we'll put it right.
+                    </Text>
+                    <TouchableOpacity style={[st.noShowBtn, isBusy&&st.dis]}
+                      disabled={isBusy} onPress={()=>doNoShow(b.id)}>
+                      <Text style={st.noShowTxt}>
+                        {isBusy ? '…' : 'They never came — cancel for free'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })()}
+
+              {b.status === 'pending' && (() => {
+                const age = (Date.now() - new Date(b.createdAt).getTime()) / 60000;
+                if (age < 10) return null;
+                return (
+                  <View style={st.slowBox}>
+                    <Text style={st.slowTitle}>
+                      ⏳  Still waiting for someone to accept
+                    </Text>
+                    <Text style={st.slowTxt}>
+                      {age > 1440
+                        ? "Nobody has picked this up. It may be the time, the area, or there simply isn't anyone free. You can cancel at no cost."
+                        : "Providers usually answer within the hour. Nothing has been charged, and you can cancel at any time."}
+                    </Text>
+                  </View>
+                );
+              })()}
+
+              {cancelFor !== b.id &&
+               ['pending','pending_pool','reschedule_proposed','accepted'].includes(b.status) && (
+                <TouchableOpacity style={st.cancelBooking} onPress={()=>setCancelFor(b.id)}>
                   <Text style={st.cancelBookingTxt}>Cancel Booking</Text>
                 </TouchableOpacity>
               )}
 
-              {b.status==='completed' && (
-                <TouchableOpacity style={st.reviewBtn}
-                  onPress={()=>router.push(`/review?bookingId=${b.id}&cleanerId=${b.cleanerId}&cleanerName=${encodeURIComponent(cleaner?.name||'your cleaner')}`)}>
-                  <Text style={st.reviewTxt}>⭐  Leave a Review</Text>
+              {['cancelled','disputed'].includes(b.status) && (
+                <TouchableOpacity style={st.clearBtn}
+                  onPress={()=>hideBooking(b.id, 'client')}>
+                  <Text style={st.clearTxt}>Clear from my list</Text>
                 </TouchableOpacity>
+              )}
+
+              {b.status==='completed' && (
+                <>
+                  <TouchableOpacity style={st.reviewBtn}
+                    onPress={()=>router.push(`/review?bookingId=${b.id}&cleanerId=${b.cleanerId}&cleanerName=${encodeURIComponent(cleaner?.name||'your provider')}`)}>
+                    <Text style={st.reviewTxt}>⭐  Leave a Review</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={st.clearBtn}
+                    onPress={()=>hideBooking(b.id, 'client')}>
+                    <Text style={st.clearTxt}>Clear from my list</Text>
+                  </TouchableOpacity>
+                </>
               )}
             </View>
           </View>
@@ -683,6 +851,42 @@ const st = StyleSheet.create({
   approveBtn:{flex:1,backgroundColor:C.green,borderRadius:12,paddingVertical:12,alignItems:'center'},
   whiteTxt:{color:C.white,fontWeight:'700',fontSize:13},
   dis:{opacity:0.5},
+  clearBtn:{paddingVertical:11,alignItems:'center',borderRadius:12,
+    borderWidth:1,borderColor:C.border,backgroundColor:C.white,marginTop:8},
+  clearTxt:{fontSize:12,fontWeight:'600',color:C.muted},
+  lateBox:{backgroundColor:C.redLt,borderRadius:14,padding:14,gap:7,
+    borderWidth:1.5,borderColor:'#FECACA'},
+  lateTitle:{fontSize:14,fontWeight:'800',color:C.red,lineHeight:19},
+  lateTxt:{fontSize:12,color:C.text,lineHeight:17},
+  noShowBtn:{backgroundColor:C.red,borderRadius:12,paddingVertical:12,
+    alignItems:'center',marginTop:3},
+  noShowTxt:{fontSize:13,fontWeight:'700',color:C.white},
+
+  sorryBox:{marginHorizontal:20,marginBottom:14,backgroundColor:C.white,borderRadius:16,
+    padding:16,gap:9,borderWidth:1.5,borderColor:C.primary,...S.sm},
+  sorryTitle:{fontSize:16,fontWeight:'800',color:C.dark},
+  sorryTxt:{fontSize:13,color:C.text,lineHeight:19},
+  sorryCode:{backgroundColor:C.greenLt,borderRadius:12,paddingVertical:13,
+    alignItems:'center',borderWidth:1,borderColor:'#A7F3D0'},
+  sorryCodeTxt:{fontSize:20,fontWeight:'800',color:C.green,letterSpacing:3},
+  sorryClose:{fontSize:13,color:C.primary,fontWeight:'700',textAlign:'center',paddingTop:4},
+
+  slowBox:{backgroundColor:C.amberLt,borderRadius:12,padding:13,gap:5,
+    borderWidth:1,borderColor:'#FDE68A'},
+  slowTitle:{fontSize:13,fontWeight:'800',color:C.amber},
+  slowTxt:{fontSize:12,color:C.text,lineHeight:17},
+  cancelBox:{backgroundColor:C.redLt,borderRadius:14,padding:14,gap:8,
+    borderWidth:1.5,borderColor:'#FECACA'},
+  cancelTitle:{fontSize:15,fontWeight:'800',color:C.red},
+  cancelRow:{flexDirection:'row',justifyContent:'space-between'},
+  cancelKey:{fontSize:13,color:C.text,fontWeight:'600'},
+  cancelVal:{fontSize:13,color:C.red,fontWeight:'800'},
+  cancelWhy:{fontSize:12,color:C.text,lineHeight:17},
+  keepBtn:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:12,
+    paddingVertical:12,alignItems:'center',backgroundColor:C.white},
+  keepTxt:{fontSize:13,fontWeight:'700',color:C.text},
+  confirmCancelBtn:{flex:1,backgroundColor:C.red,borderRadius:12,paddingVertical:12,
+    alignItems:'center'},
   errBanner:{flexDirection:'row',alignItems:'center',gap:10,marginHorizontal:20,
     marginBottom:14,backgroundColor:C.redLt,borderRadius:12,padding:13,
     borderWidth:1,borderColor:'#FECACA'},

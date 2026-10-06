@@ -1,4 +1,4 @@
-# Poji — Deploy to pojico.net
+# Poji — Deploy to po-ji.com
 
 ## 1. Test the production build locally
 
@@ -33,13 +33,13 @@ git push -u origin main
 
 You get a URL like poji-xxxx.vercel.app straight away.
 
-## 4. Point pojico.net at it
+## 4. Point po-ji.com at it
 
 In Vercel: Project → Settings → Domains → Add
 
 Add both:
-- pojico.net
-- www.pojico.net
+- po-ji.com
+- www.po-ji.com
 
 Vercel shows you DNS records. At your domain registrar set:
 
@@ -52,21 +52,21 @@ DNS takes 10 minutes to a few hours. HTTPS is automatic.
 
 ## 5. Redirect po-ji.co
 
-Add po-ji.co in Vercel the same way, then set it to redirect to pojico.net
-(Vercel: Domains → po-ji.co → Redirect to pojico.net).
+Add po-ji.co in Vercel the same way, then set it to redirect to po-ji.com
+(Vercel: Domains → po-ji.co → Redirect to po-ji.com).
 
 ## 6. Update Supabase
 
 Supabase → Authentication → URL Configuration:
 
-- Site URL: https://pojico.net
-- Redirect URLs: https://pojico.net/**
+- Site URL: https://po-ji.com
+- Redirect URLs: https://po-ji.com/**
 
 Otherwise password-reset emails will still point at localhost.
 
 ## 7. Update the WhatsApp links
 
-The notification templates link to poji.mt. Change that to pojico.net in
+The notification templates link to po-ji.com. If that ever changes, update it in
 supabase/functions/send-notification/index.ts, then:
 
 supabase functions deploy send-notification

@@ -10,7 +10,7 @@ import { findTrade, TRADES } from '../constants/trades';
 import { nextPenalty, PENALTIES } from '../lib/moderation';
 import { notify } from '../lib/notify';
 
-const TABS = ['Overview','Applications','Clients','Providers','Bookings','Disputes','Flagged'];
+const TABS = ['Overview','Applications','Clients','Providers','Bookings','Disputes','Flagged','Feedback'];
 
 const APP_STATUS: Record<string,{label:string;color:string;bg:string}> = {
   draft:        {label:'Draft',        color:C.muted, bg:C.bgAlt},
@@ -59,6 +59,7 @@ export default function Admin() {
   const [reviews, setReviews]    = useState<any[]>([]);
   const [flagged, setFlagged]    = useState<any[]>([]);
   const [violations, setViol]    = useState<any[]>([]);
+  const [feedback, setFeedback]  = useState<any[]>([]);
   const [penaltyFor, setPenalty] = useState<string|null>(null);
   const [penaltyNote, setPNote]  = useState('');
   const [loading, setLoading]    = useState(true);
@@ -78,7 +79,7 @@ export default function Admin() {
     const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
     if (me?.role !== 'admin') { setNotAdmin(true); setLoading(false); return; }
 
-    const [a, p, b, r, fl, vi] = await Promise.all([
+    const [a, p, b, r, fl, vi, fb] = await Promise.all([
       supabase.from('cleaner_profiles').select('*').order('submitted_at',{ascending:false}),
       supabase.from('profiles').select('*'),
       supabase.from('bookings').select('*').order('created_at',{ascending:false}),
@@ -86,11 +87,12 @@ export default function Admin() {
       supabase.from('messages').select('*').eq('flagged', true)
         .order('created_at', { ascending:false }).limit(100),
       supabase.from('violations').select('*').order('created_at', { ascending:false }),
+      supabase.from('platform_feedback').select('*').order('created_at', { ascending:false }),
     ]);
 
     setApps(a.data||[]); setProfiles(p.data||[]);
     setBookings(b.data||[]); setReviews(r.data||[]);
-    setFlagged(fl.data||[]); setViol(vi.data||[]);
+    setFlagged(fl.data||[]); setViol(vi.data||[]); setFeedback(fb.data||[]);
     setLoading(false);
   };
 
@@ -177,6 +179,7 @@ export default function Admin() {
         status: app?.verification_status || 'none',
         categories: app?.categories || [],
         acceptsUrgent: !!app?.accepts_urgent,
+        noShows: Number(app?.no_show_count) || 0,
       };
     }).sort((a,b)=>b.earned-a.earned);
   },[profiles, bookings, apps, reviews]);
@@ -636,6 +639,13 @@ export default function Admin() {
                         <Text style={[st.tradeBadgeTxt,{color:C.amber}]}>⚡ Emergency</Text>
                       </View>
                     )}
+                    {(c as any).noShows > 0 && (
+                      <View style={[st.tradeBadge,{backgroundColor:C.redLt,borderColor:'#FECACA'}]}>
+                        <Text style={[st.tradeBadgeTxt,{color:C.red}]}>
+                          {(c as any).noShows} no-show{(c as any).noShows>1?'s':''}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 )}
 
@@ -854,6 +864,62 @@ export default function Admin() {
         </>
       )}
 
+      {/* ════════ FEEDBACK ════════ */}
+      {tab===7 && (() => {
+        const scores = feedback.map(f=>Number(f.score)).filter(n=>!isNaN(n));
+        const promoters = scores.filter(n=>n>=9).length;
+        const detractors= scores.filter(n=>n<=6).length;
+        const nps = scores.length
+          ? Math.round(((promoters - detractors) / scores.length) * 100) : null;
+
+        return (
+          <>
+            <View style={st.miniRow}>
+              <Mini label="Responses" value={String(scores.length)} />
+              <Mini label="NPS" value={nps === null ? '—' : String(nps)}
+                color={nps === null ? undefined : nps >= 30 ? C.green : nps >= 0 ? C.amber : C.red} />
+              <Mini label="Promoters" value={String(promoters)} color={C.green} />
+              <Mini label="Detractors" value={String(detractors)} color={C.red} />
+            </View>
+
+            {feedback.length === 0 ? (
+              <View style={st.empty}>
+                <Text style={st.emptyIcon}>💬</Text>
+                <Text style={st.emptyTxt}>No feedback yet</Text>
+                <Text style={st.emptySub}>
+                  People are asked once, after their second finished job.
+                </Text>
+              </View>
+            ) : feedback.map(f=>{
+              const who = profiles.find((p:any)=>p.id===f.user_id);
+              const tone = f.score >= 9 ? C.green : f.score <= 6 ? C.red : C.amber;
+              return (
+                <View key={f.id} style={st.card}>
+                  <View style={st.rowBetween}>
+                    <View style={{flex:1}}>
+                      <Text style={st.cardTitle}>{who?.full_name || 'Someone'}</Text>
+                      <Text style={st.cardSub}>
+                        {f.role === 'cleaner' ? 'Provider' : 'Client'}
+                        {'  ·  '}{f.jobs_done} job{f.jobs_done===1?'':'s'}
+                        {'  ·  '}{new Date(f.created_at).toLocaleDateString('en-GB')}
+                      </Text>
+                    </View>
+                    <View style={[st.scorePill,{backgroundColor:tone+'22'}]}>
+                      <Text style={[st.scoreTxt,{color:tone}]}>{f.score}</Text>
+                    </View>
+                  </View>
+                  {!!f.comment && (
+                    <View style={st.quoteBox}>
+                      <Text style={st.quoteTxt}>"{f.comment}"</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </>
+        );
+      })()}
+
       {/* ════════ DISPUTES ════════ */}
       {tab===5 && (
         disputes.length===0 ? <Empty text="No open disputes 🎉" /> :
@@ -1058,6 +1124,8 @@ const st = StyleSheet.create({
   noteRed:{backgroundColor:C.redLt,borderRadius:10,padding:10,borderWidth:1,borderColor:'#FECACA'},
   noteRedTxt:{fontSize:12,color:C.red,fontWeight:'600'},
   dis:{opacity:0.5},
+  scorePill:{minWidth:40,height:40,borderRadius:12,alignItems:'center',justifyContent:'center'},
+  scoreTxt:{fontSize:17,fontWeight:'800'},
   quoteBox:{backgroundColor:C.bgAlt,borderRadius:10,padding:12,borderLeftWidth:3,
     borderLeftColor:C.red},
   quoteTxt:{fontSize:13,color:C.text,lineHeight:19,fontStyle:'italic'},

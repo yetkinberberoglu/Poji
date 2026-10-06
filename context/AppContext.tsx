@@ -51,6 +51,8 @@ export interface Booking {
   answers?: Record<string,string> | null;
   fromLocality?: string | null; toLocality?: string | null;
   vehicleType?: string | null; routeBand?: string | null; loadNote?: string | null;
+  promoCode?: string | null; discount?: number | null;
+  noShow?: boolean | null;
   labourTotal?: number | null;
   quoteAmount?: number | null;
   quoteParts?: number | null;
@@ -90,13 +92,16 @@ interface Ctx {
              labourTotal?: number|null; partsTotal?: number|null;
              answers?: Record<string,string>;
              fromLocality?: string|null; toLocality?: string|null;
-             vehicleType?: string|null; routeBand?: string|null; loadNote?: string|null }
+             vehicleType?: string|null; routeBand?: string|null; loadNote?: string|null;
+             promoCode?: string|null; discount?: number }
   ) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   markArrived: (id: string) => Promise<string>;
   verifyPin: (id: string, pin: string) => Promise<boolean>;
   finishJob: (id: string, photos?: string[]) => Promise<void>;
   clientConfirm: (id: string) => Promise<void>;
+  hideBooking: (id: string, who: 'client'|'provider') => Promise<void>;
+  reportNoShow: (id: string) => Promise<string>;
   clientDispute: (id: string, reason: string) => Promise<void>;
   releaseToPool: (id: string) => Promise<void>;
   reassignCleaner: (id: string, newCleanerId: string) => Promise<void>;
@@ -235,10 +240,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (role === 'client') {
       query = query.eq('client_id', user.id);
+      query = query.eq('hidden_for_client', false);
     } else if (role === 'cleaner') {
       query = query.or(
         `cleaner_id.eq.${user.id},preferred_cleaner_id.eq.${user.id},released_to_pool.eq.true`
-      );
+      ).eq('hidden_for_provider', false);
     }
 
     const { data, error } = await query;
@@ -299,6 +305,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         vehicleType: b.vehicle_type,
         routeBand: b.route_band,
         loadNote: b.load_note,
+        promoCode: b.promo_code,
+        noShow: b.no_show,
+        discount: b.discount,
         labourTotal: b.labour_total,
         quoteAmount: b.quote_amount,
         quoteParts: b.quote_parts,
@@ -387,7 +396,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
              labourTotal?: number|null; partsTotal?: number|null;
              answers?: Record<string,string>;
              fromLocality?: string|null; toLocality?: string|null;
-             vehicleType?: string|null; routeBand?: string|null; loadNote?: string|null }
+             vehicleType?: string|null; routeBand?: string|null; loadNote?: string|null;
+             promoCode?: string|null; discount?: number }
   ) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
@@ -432,6 +442,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       vehicle_type: meta?.vehicleType ?? null,
       route_band: meta?.routeBand ?? null,
       load_note: meta?.loadNote ?? null,
+      promo_code: meta?.promoCode ?? null,
+      discount: meta?.discount ?? 0,
       labour_total: meta?.labourTotal ?? null,
       parts_total: meta?.partsTotal ?? 0,
       preferred_cleaner_id: b.cleanerId || null,
@@ -455,6 +467,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .then(() => seedExtraTasks(data.id, meta?.extrasForChecklist || []));
 
       // Roadside and pool jobs: alert every approved provider at once
+      if (meta?.promoCode) {
+        supabase.from('promo_uses').insert({
+          code: meta.promoCode,
+          user_id: b.clientId || null,
+          booking_id: data.id,
+          amount: meta.discount ?? 0,
+        }).then(({ error: pe }) => {
+          if (pe) console.log('promo_uses:', pe.message);
+          else supabase.rpc('bump_promo', { p_code: meta.promoCode }).then(()=>{});
+        });
+      }
+
       if (meta?.releasedToPool) {
         matchingProviders({ tradeId: meta?.tradeId, date: b.date, time: b.time })
           .then(list => list.forEach(c => notify(c.id, 'job_in_pool', {
@@ -795,6 +819,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /** Tidy a finished job out of your own list. The record stays for both
+      sides and for the books — this is a view, not a delete. */
+  const hideBooking = async (id: string, who: 'client' | 'provider') => {
+    const col = who === 'client' ? 'hidden_for_client' : 'hidden_for_provider';
+    setBookings(prev => prev.filter(b => b.id !== id));
+    const { error } = await supabase.from('bookings')
+      .update({ [col]: true }).eq('id', id);
+    if (error) { console.log('hideBooking:', error.message); await loadBookings(); }
+  };
+
+  /** Nobody turned up. Cancel at no cost, and put it on the record. */
+  const reportNoShow = async (id: string): Promise<string> => {
+    const bk = bookings.find(x => x.id === id);
+
+    const { data, error } = await supabase.rpc('report_no_show', { p_booking: id });
+    if (error) { console.log('reportNoShow:', error.message); throw new Error(error.message); }
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b, status: 'cancelled', noShow: true } : b));
+
+    if (bk?.cleanerId) {
+      notify(bk.cleanerId, 'no_show_recorded', {
+        address: bk.address, date: bk.date, time: bk.time,
+      }, id);
+    }
+
+    return (data as any)?.code || '';
+  };
+
   const clientConfirm = async (id: string) => {
     const bk = bookings.find(x => x.id === id);
 
@@ -842,7 +895,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
       releaseToPool, reassignCleaner, acceptJob, proposeTime, respondToProposal,
-      sendQuote, respondToQuote,
+      sendQuote, respondToQuote, hideBooking, reportNoShow,
       loadBookings, getCleanerById,
       userRole, userName, userId, myCategories,
     }}>

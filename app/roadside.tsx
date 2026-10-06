@@ -24,6 +24,8 @@ export default function Roadside() {
   const [types, setTypes]   = useState<ServiceType[]>([]);
   const [loadingCat, setLC] = useState(true);
   const [submitting, setSub]= useState(false);
+  const [placed, setPlaced] = useState<any>(null);
+  const [failed, setFailed] = useState('');
 
   const [svc, setSvc]         = useState<string|null>(null);
   const [urgent, setUrgent]   = useState(true);
@@ -83,7 +85,7 @@ export default function Roadside() {
 
   const submit = async () => {
     if (!type) return;
-    setSub(true);
+    setSub(true); setFailed('');
     try {
       const now = new Date();
       await addBooking({
@@ -103,10 +105,10 @@ export default function Roadside() {
         hourlyRate: 0,
         extraIds: [],
         propertySize: 'vehicle',
-        tradeId: type.trade_id || trade || null,
         estimatedMinutes: Number(type.typical_minutes) || 30,
         extrasForChecklist: [],
         pricingModel: isQuoteJob ? 'quote' : 'fixed',
+        tradeId: type.trade_id || trade || null,
         calloutFee: Number(type.callout_fee) || 0,
         isUrgent: urgent,
         lat: coords?.lat ?? null,
@@ -117,13 +119,18 @@ export default function Roadside() {
         answers,
         releasedToPool: true,
       });
-      Alert.alert(
-        '🚨 Help is on the way',
-        'Every available provider nearby has been alerted. The first to accept will call you.',
-        [{ text:'View request', onPress:()=>router.replace('/(tabs)/bookings') }]
-      );
-    } catch {
-      Alert.alert('Error','Could not send the request. Please try again.');
+
+      setPlaced({
+        service: type.name,
+        icon: type.icon,
+        where: locLabel || manualAddr,
+        total: isQuoteJob ? 0 : (p?.clientPays || 0),
+        isQuote: isQuoteJob,
+        urgent,
+      });
+    } catch (e: any) {
+      console.error('Roadside request failed:', e);
+      setFailed(e?.message || 'Could not send the request');
     } finally { setSub(false); }
   };
 
@@ -132,6 +139,51 @@ export default function Roadside() {
     step === 1 ? !!coords || !!manualAddr :
     step === 2 ? unanswered.length === 0 :
     true;
+
+  if (placed) {
+    return (
+      <ScrollView style={s.wrap} contentContainerStyle={{padding:24, paddingTop:70}}>
+        <View style={{alignItems:'center', gap:10, marginBottom:22}}>
+          <Text style={{fontSize:56}}>{placed.urgent ? '🚨' : '✅'}</Text>
+          <Text style={s.doneTitle}>Help is on the way</Text>
+          <Text style={s.doneSub}>
+            Every provider nearby who can do this has been alerted. The first to
+            accept will see your location and head over.
+          </Text>
+        </View>
+
+        <View style={s.doneCard}>
+          {[
+            ['Problem', `${placed.icon || ''} ${placed.service}`],
+            ['Where',   placed.where || '—'],
+            ['Timing',  placed.urgent ? 'Right now' : 'Within a day'],
+            ...(placed.isQuote ? [] : [['You pay', `€${Number(placed.total).toFixed(2)}`]]),
+          ].map(([l,v])=>(
+            <View key={String(l)} style={s.summRow}>
+              <Text style={s.summLbl}>{l}</Text>
+              <Text style={s.summVal}>{v}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={s.doneNote}>
+          <Text style={s.doneNoteTitle}>💳  Nothing has been charged</Text>
+          <Text style={s.doneNoteTxt}>
+            {placed.isQuote
+              ? "They'll message you with a price before anyone travels. Decline and the job is cancelled, no fee."
+              : "Your card is only held. The money moves after the work is done and you approve it."}
+          </Text>
+        </View>
+
+        <TouchableOpacity style={s.doneBtn}
+          onPress={()=>router.replace('/(tabs)/bookings')}>
+          <Text style={s.doneBtnTxt}>Track my request</Text>
+        </TouchableOpacity>
+
+        <View style={{height:40}}/>
+      </ScrollView>
+    );
+  }
 
   return (
     <View style={s.wrap}>
@@ -396,6 +448,13 @@ export default function Roadside() {
             </View>
             )}
 
+            {failed ? (
+              <View style={s.failBox}>
+                <Text style={s.failTitle}>⚠️  Couldn't send that</Text>
+                <Text style={s.failTxt}>{failed}</Text>
+              </View>
+            ) : null}
+
             <View style={s.fixedNote}>
               <Text style={s.fixedTitle}>🔒  This price is fixed</Text>
               <Text style={s.fixedTxt}>
@@ -527,6 +586,20 @@ const s = StyleSheet.create({
   fixedTitle:{fontSize:14,fontWeight:'800',color:C.amber},
   fixedTxt:{fontSize:12,color:C.text,lineHeight:18},
 
+  failBox:{backgroundColor:C.redLt,borderRadius:14,padding:14,gap:5,marginBottom:14,
+    borderWidth:1,borderColor:'#FECACA'},
+  failTitle:{fontSize:14,fontWeight:'800',color:C.red},
+  failTxt:{fontSize:12,color:C.red,lineHeight:18},
+  doneTitle:{fontSize:26,fontWeight:'800',color:C.dark,textAlign:'center'},
+  doneSub:{fontSize:14,color:C.muted,textAlign:'center',lineHeight:21},
+  doneCard:{backgroundColor:C.white,borderRadius:16,padding:16,marginBottom:14,
+    borderWidth:1,borderColor:C.border,...S.sm},
+  doneNote:{backgroundColor:C.primaryLt,borderRadius:16,padding:16,gap:6,marginBottom:20,
+    borderWidth:1,borderColor:C.border},
+  doneNoteTitle:{fontSize:15,fontWeight:'800',color:C.primary},
+  doneNoteTxt:{fontSize:13,color:C.text,lineHeight:19},
+  doneBtn:{backgroundColor:C.primary,borderRadius:16,paddingVertical:17,alignItems:'center',...S.md},
+  doneBtnTxt:{color:C.white,fontSize:16,fontWeight:'700'},
   footer:{flexDirection:'row',alignItems:'center',paddingHorizontal:20,paddingVertical:16,backgroundColor:C.white,borderTopWidth:1,borderTopColor:C.border,gap:16},
   footerLbl:{fontSize:11,color:C.muted},
   footerVal:{fontSize:20,fontWeight:'800',color:C.dark},

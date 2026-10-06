@@ -85,6 +85,14 @@ function buildMessage(template: string, d: Record<string, any>): string {
       return `😕 *The client declined your quote*\n\n`
         + `${d.address} — the job is cancelled. Nobody travelled, nobody is charged.`;
 
+    case 'no_show_recorded':
+      return `⚠️ *A client reported that you didn't arrive*\n\n`
+        + `📍 ${d.address}\n`
+        + `📅 ${d.date} at ${d.time}\n\n`
+        + `The job has been cancelled and nobody was charged. This is now on your `
+        + `record. If something happened, reply here and we'll look at it.\n\n`
+        + `Repeated no-shows end in suspension.`;
+
     case 'time_proposed':
       return `📅 *${d.cleanerName} suggests another time*\n\n`
         + `You asked for ${d.oldDate} at ${d.oldTime}.\n`
