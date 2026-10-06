@@ -59,6 +59,17 @@ export default function Bookings() {
   const [cancelFor, setCancelFor]     = useState<string|null>(null);
   const [serviceTypes, setServiceTypes] = useState<Record<string, any>>({});
   const [apology, setApology]           = useState<string|null>(null);
+  const [reviewed, setReviewed]         = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const done = bookings.filter(b => b.status === 'completed').map(b => b.id);
+    if (!done.length) return;
+    (async () => {
+      const { data } = await supabase.from('reviews')
+        .select('booking_id').in('booking_id', done);
+      setReviewed(new Set((data || []).map((r:any) => r.booking_id)));
+    })();
+  }, [bookings.length]);
 
   /** How late is this, in minutes? Negative means it hasn't started yet. */
   const minutesLate = (b: any) => {
@@ -712,10 +723,16 @@ export default function Bookings() {
 
               {b.status==='completed' && (
                 <>
-                  <TouchableOpacity style={st.reviewBtn}
-                    onPress={()=>router.push(`/review?bookingId=${b.id}&cleanerId=${b.cleanerId}&cleanerName=${encodeURIComponent(cleaner?.name||'your provider')}`)}>
-                    <Text style={st.reviewTxt}>⭐  Leave a Review</Text>
-                  </TouchableOpacity>
+                  {reviewed.has(b.id) ? (
+                    <View style={st.reviewedRow}>
+                      <Text style={st.reviewedTxt}>⭐  You've rated this job</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity style={st.reviewBtn}
+                      onPress={()=>router.push(`/review?bookingId=${b.id}&cleanerId=${b.cleanerId}&cleanerName=${encodeURIComponent(cleaner?.name||'your provider')}`)}>
+                      <Text style={st.reviewTxt}>⭐  Leave a Review</Text>
+                    </TouchableOpacity>
+                  )}
 
                   <TouchableOpacity style={st.clearBtn}
                     onPress={()=>hideBooking(b.id, 'client')}>
@@ -851,6 +868,9 @@ const st = StyleSheet.create({
   approveBtn:{flex:1,backgroundColor:C.green,borderRadius:12,paddingVertical:12,alignItems:'center'},
   whiteTxt:{color:C.white,fontWeight:'700',fontSize:13},
   dis:{opacity:0.5},
+  reviewedRow:{paddingVertical:11,alignItems:'center',borderRadius:12,
+    backgroundColor:C.greenLt,borderWidth:1,borderColor:'#A7F3D0'},
+  reviewedTxt:{fontSize:12,fontWeight:'700',color:C.green},
   clearBtn:{paddingVertical:11,alignItems:'center',borderRadius:12,
     borderWidth:1,borderColor:C.border,backgroundColor:C.white,marginTop:8},
   clearTxt:{fontSize:12,fontWeight:'600',color:C.muted},

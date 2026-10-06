@@ -26,6 +26,13 @@ export default function ReviewScreen() {
       booking_id: params.bookingId, reviewer_id: user.id,
       cleaner_id: params.cleanerId, rating, comment: comment || null,
     });
+
+    if (err?.code === '23505') {
+      // one review per job, enforced in the database
+      setError("You've already rated this job.");
+      setLoading(false);
+      return;
+    }
     setLoading(false);
     if (err) { setError(err.message); return; }
     setDone(true);
@@ -37,7 +44,7 @@ export default function ReviewScreen() {
       <View style={s.doneWrap}>
         <Text style={s.doneIcon}>🎉</Text>
         <Text style={s.doneTitle}>Thank you!</Text>
-        <Text style={s.doneSub}>Your review helps other clients find great cleaners.</Text>
+        <Text style={s.doneSub}>Your review helps other clients choose well.</Text>
         <View style={s.doneStars}>
           {[1,2,3,4,5].map(i => <Text key={i} style={s.doneStar}>{i <= rating ? '⭐' : '☆'}</Text>)}
         </View>
