@@ -1,15 +1,20 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, ActivityIndicator, Modal, Linking
+  ScrollView, ActivityIndicator, Modal, Image, Dimensions
 } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { scanMessage, contactUnlocked, CONTACT_WINDOW_HOURS } from '../lib/moderation';
+import {
+  pickPhoto, uploadChatPhoto, photoUrls, canSendPhotos, type Picked,
+} from '../lib/photos';
 
 type Msg = {
   id: string; booking_id: string; sender_id: string; sender_role: string;
-  body: string; flagged: boolean; created_at: string;
+  body: string | null; flagged: boolean; created_at: string;
+  read_at?: string | null;
+  image_path?: string | null; image_w?: number | null; image_h?: number | null;
 };
 
 const time = (iso: string) =>
@@ -40,6 +45,11 @@ export default function Chat({
   const [warn, setWarn]   = useState<string[]>([]);
   const [calling, setCalling]   = useState(false);
   const [callError, setCallErr] = useState('');
+  const [pending, setPending] = useState<(Picked & { preview: string }) | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [urls, setUrls]       = useState<Record<string,string>>({});
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [sendErr, setSendErr] = useState('');
   const scroller = useRef<ScrollView>(null);
 
   const canSeeContact = contactUnlocked(booking);
@@ -75,6 +85,15 @@ export default function Chat({
 
   useEffect(() => { load(); }, [booking.id]);
 
+  // the bucket is private, so each picture needs a signed link
+  useEffect(() => {
+    const paths = msgs.map(m => m.image_path).filter(Boolean) as string[];
+    if (!paths.length) return;
+    const missing = paths.filter(p => !urls[p]);
+    if (!missing.length) return;
+    photoUrls(paths).then(setUrls);
+  }, [msgs]);
+
   // live updates while the sheet is open
   useEffect(() => {
     if (!open) return;
@@ -98,26 +117,61 @@ export default function Chat({
       .then(() => {});
   }, [open, msgs.length]);
 
+  const attach = async () => {
+    setPicking(true); setSendErr('');
+    try {
+      const p = await pickPhoto();
+      if (p) {
+        // one object URL, revoked when it is replaced or dropped
+        if (pending) URL.revokeObjectURL(pending.preview);
+        setPending({ ...p, preview: URL.createObjectURL(p.blob) });
+      }
+    } catch (e: any) {
+      setSendErr(e?.message || 'Could not open your photos');
+    }
+    setPicking(false);
+  };
+
   const send = async () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body && !pending) return;
 
-    const scan = scanMessage(body);
-    setBusy(true);
+    const scan = body ? scanMessage(body) : { flagged:false, reasons:[] as string[] };
+    setBusy(true); setSendErr('');
+
+    let imagePath: string | null = null;
+    if (pending) {
+      try {
+        imagePath = await uploadChatPhoto(booking.id, pending);
+      } catch (e: any) {
+        setBusy(false);
+        setSendErr(e?.message || 'That picture would not upload');
+        return;
+      }
+    }
 
     const { error } = await supabase.from('messages').insert({
       booking_id: booking.id,
       sender_id: myId,
       sender_role: role,
-      body,
+      body: body || null,
+      image_path: imagePath,
+      image_w: pending?.width ?? null,
+      image_h: pending?.height ?? null,
       flagged: scan.flagged,
       flag_reasons: scan.flagged ? scan.reasons : null,
     });
 
     setBusy(false);
-    if (error) { console.log('send:', error.message); return; }
+    if (error) {
+      console.log('send:', error.message);
+      setSendErr('That did not send. Try again.');
+      return;
+    }
 
     setText('');
+    if (pending) URL.revokeObjectURL(pending.preview);
+    setPending(null);
 
     // tell the other side — they are almost certainly not looking at this screen
     const otherId = role === 'client' ? booking.cleanerId : booking.clientId;
@@ -129,7 +183,7 @@ export default function Chat({
           template: 'new_message',
           data: {
             fromName: role === 'client' ? 'Your client' : otherName,
-            preview: body,
+            preview: body || (imagePath ? 'Sent a photo' : ''),
             role: role === 'client' ? 'cleaner' : 'client',
           },
         },
@@ -147,8 +201,14 @@ export default function Chat({
         <View style={{flex:1}}>
           <Text style={s.triggerTitle}>Message {otherName.split(' ')[0]}</Text>
           <Text style={s.triggerSub}>
-            {msgs.length === 0 ? 'Ask a question about the job'
-              : msgs[msgs.length-1].body.slice(0, 44) + (msgs[msgs.length-1].body.length > 44 ? '…' : '')}
+            {msgs.length === 0 ? 'Ask a question, or send a photo'
+              : (() => {
+                  const last = msgs[msgs.length-1];
+                  if (last.image_path && !last.body) return '📷  Photo';
+                  const t = last.body || '';
+                  return (last.image_path ? '📷  ' : '') + t.slice(0, 40)
+                       + (t.length > 40 ? '…' : '');
+                })()}
           </Text>
         </View>
         {unread > 0 && (
@@ -208,7 +268,9 @@ export default function Chat({
                 <Text style={s.emptyTitle}>No messages yet</Text>
                 <Text style={s.emptyTxt}>
                   Anything about the job — access, parking, what to bring.
-                  Everything here is kept with the booking.
+                  {canSendPhotos()
+                    ? ' A photo of the fault or the model plate saves everyone a visit.'
+                    : ''}
                 </Text>
               </View>
             ) : msgs.map((m, i) => {
@@ -218,9 +280,47 @@ export default function Chat({
                 <View key={m.id}>
                   {showDay && <Text style={s.dayLine}>{day(m.created_at)}</Text>}
                   <View style={[s.bubbleRow, mine && {justifyContent:'flex-end'}]}>
-                    <View style={[s.bubble, mine ? s.mine : s.theirs]}>
-                      <Text style={[s.body, mine && {color:C.white}]}>{m.body}</Text>
-                      <Text style={[s.time, mine && {color:'#C7D2FE'}]}>
+                    <View style={[
+                      s.bubble, mine ? s.mine : s.theirs,
+                      m.image_path && s.bubblePhoto,
+                    ]}>
+                      {m.image_path && (() => {
+                        const url = urls[m.image_path];
+                        const ratio = (m.image_w && m.image_h)
+                          ? m.image_w / m.image_h : 4/3;
+                        const w = Math.min(230, Dimensions.get('window').width * 0.58);
+                        return (
+                          <TouchableOpacity activeOpacity={0.9}
+                            disabled={!url}
+                            onPress={()=>url && setViewing(url)}>
+                            {url ? (
+                              <Image
+                                source={{ uri: url }}
+                                style={[s.photo, { width:w, height:w/ratio }]}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <View style={[s.photo, s.photoWait,
+                                            { width:w, height:w/ratio }]}>
+                                <ActivityIndicator size="small"
+                                  color={mine ? C.white : C.muted} />
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })()}
+
+                      {!!m.body && (
+                        <Text style={[
+                          s.body, mine && {color:C.white},
+                          m.image_path && s.bodyUnderPhoto,
+                        ]}>{m.body}</Text>
+                      )}
+
+                      <Text style={[
+                        s.time, mine && {color:'#C7D2FE'},
+                        m.image_path && !m.body && s.timeOnPhoto,
+                      ]}>
                         {time(m.created_at)}
                         {m.flagged && mine ? '  ⚠️' : ''}
                       </Text>
@@ -246,23 +346,73 @@ export default function Chat({
             </View>
           )}
 
+          {sendErr ? (
+            <View style={s.sendErrBox}>
+              <Text style={s.sendErrTxt}>{sendErr}</Text>
+            </View>
+          ) : null}
+
+          {pending && (
+            <View style={s.pendingBar}>
+              <Image
+                source={{ uri: pending.preview }}
+                style={s.pendingThumb}
+                resizeMode="cover"
+              />
+              <View style={{flex:1}}>
+                <Text style={s.pendingTitle}>Photo ready to send</Text>
+                <Text style={s.pendingSub}>
+                  {pending.width}×{pending.height} · {(pending.blob.size/1024).toFixed(0)} KB
+                  {'  ·  add a note if it helps'}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={()=>{
+                URL.revokeObjectURL(pending.preview);
+                setPending(null);
+              }}>
+                <Text style={s.pendingX}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           <View style={s.composer}>
+            {canSendPhotos() && (
+              <TouchableOpacity
+                style={[s.attachBtn, (picking||busy) && s.sendDis]}
+                disabled={picking||busy}
+                onPress={attach}>
+                {picking ? <ActivityIndicator color={C.primary} size="small" />
+                  : <Text style={s.attachTxt}>📷</Text>}
+              </TouchableOpacity>
+            )}
             <TextInput
               style={s.input}
               value={text}
               onChangeText={setText}
-              placeholder="Write a message"
+              placeholder={pending ? 'Add a note (optional)' : 'Write a message'}
               placeholderTextColor={C.muted}
               multiline
             />
             <TouchableOpacity
-              style={[s.sendBtn, (!text.trim()||busy) && s.sendDis]}
-              disabled={!text.trim()||busy}
+              style={[s.sendBtn, ((!text.trim() && !pending)||busy) && s.sendDis]}
+              disabled={(!text.trim() && !pending)||busy}
               onPress={send}>
               {busy ? <ActivityIndicator color={C.white} size="small" />
                 : <Text style={s.sendTxt}>Send</Text>}
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!viewing} transparent animationType="fade"
+        onRequestClose={()=>setViewing(null)}>
+        <View style={s.viewer}>
+          <TouchableOpacity style={s.viewerClose} onPress={()=>setViewing(null)}>
+            <Text style={s.viewerCloseTxt}>✕</Text>
+          </TouchableOpacity>
+          {viewing && (
+            <Image source={{ uri: viewing }} style={s.viewerImg} resizeMode="contain" />
+          )}
         </View>
       </Modal>
     </>
@@ -287,11 +437,6 @@ const s = StyleSheet.create({
   hdrName:{fontSize:16,fontWeight:'800',color:C.dark},
   hdrSub:{fontSize:11,color:C.muted,marginTop:2},
 
-  phoneRow:{flexDirection:'row',alignItems:'center',gap:10,backgroundColor:C.greenLt,
-    paddingHorizontal:16,paddingVertical:11,borderBottomWidth:1,borderBottomColor:'#A7F3D0'},
-  phoneIcon:{fontSize:16},
-  phoneTxt:{flex:1,fontSize:14,fontWeight:'700',color:C.dark},
-  phoneCall:{fontSize:13,color:C.green,fontWeight:'800'},
   callRow:{flexDirection:'row',alignItems:'center',gap:11,backgroundColor:C.greenLt,
     paddingHorizontal:16,paddingVertical:11,borderBottomWidth:1,borderBottomColor:'#A7F3D0'},
   callIcon:{fontSize:17},
@@ -310,8 +455,13 @@ const s = StyleSheet.create({
   bubble:{maxWidth:'82%',borderRadius:16,paddingHorizontal:14,paddingVertical:10},
   mine:{backgroundColor:C.primary,borderBottomRightRadius:4},
   theirs:{backgroundColor:C.white,borderBottomLeftRadius:4,borderWidth:1,borderColor:C.border},
+  bubblePhoto:{paddingHorizontal:4,paddingVertical:4,overflow:'hidden'},
+  photo:{borderRadius:12,backgroundColor:C.bgAlt},
+  photoWait:{alignItems:'center',justifyContent:'center'},
   body:{fontSize:14,color:C.text,lineHeight:20},
+  bodyUnderPhoto:{paddingHorizontal:10,paddingTop:8},
   time:{fontSize:10,color:C.muted,marginTop:4,alignSelf:'flex-end'},
+  timeOnPhoto:{paddingRight:8,paddingBottom:2,marginTop:2},
 
   emptyBox:{alignItems:'center',paddingTop:50,gap:8},
   emptyIcon:{fontSize:44},
@@ -322,6 +472,29 @@ const s = StyleSheet.create({
   warnTitle:{fontSize:13,fontWeight:'800',color:C.amber},
   warnTxt:{fontSize:12,color:C.text,lineHeight:18},
   warnBtn:{fontSize:13,color:C.amber,fontWeight:'800',alignSelf:'flex-end'},
+
+  sendErrBox:{backgroundColor:C.redLt,paddingHorizontal:16,paddingVertical:9,
+    borderTopWidth:1,borderTopColor:'#FECACA'},
+  sendErrTxt:{fontSize:12,color:C.red,fontWeight:'600'},
+
+  pendingBar:{flexDirection:'row',alignItems:'center',gap:11,padding:10,
+    backgroundColor:C.primaryLt,borderTopWidth:1,borderTopColor:C.border},
+  pendingThumb:{width:48,height:48,borderRadius:9,backgroundColor:C.bgAlt},
+  pendingTitle:{fontSize:13,fontWeight:'800',color:C.primary},
+  pendingSub:{fontSize:11,color:C.muted,marginTop:2},
+  pendingX:{fontSize:16,color:C.muted,fontWeight:'800',paddingHorizontal:6},
+
+  attachBtn:{width:42,height:42,borderRadius:21,backgroundColor:C.bg,
+    alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:C.border},
+  attachTxt:{fontSize:19},
+
+  viewer:{flex:1,backgroundColor:'rgba(10,8,22,0.96)',
+    alignItems:'center',justifyContent:'center'},
+  viewerImg:{width:'94%',height:'82%'},
+  viewerClose:{position:'absolute',top:54,right:22,width:40,height:40,borderRadius:20,
+    backgroundColor:'rgba(255,255,255,0.16)',alignItems:'center',justifyContent:'center',
+    zIndex:2},
+  viewerCloseTxt:{color:'#FFFFFF',fontSize:17,fontWeight:'800'},
 
   composer:{flexDirection:'row',alignItems:'flex-end',gap:10,padding:12,
     backgroundColor:C.white,borderTopWidth:1,borderTopColor:C.border},

@@ -2,24 +2,41 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, ActivityIndicator
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { C, S } from '../constants/theme';
-import { CATEGORIES, tradesIn } from '../constants/trades';
+import { CATEGORIES, tradesIn, findCategory } from '../constants/trades';
 import { useApp } from '../context/AppContext';
 import { supabase } from '../lib/supabase';
 
 export default function RequestService() {
+  const { cat: catParam } = useLocalSearchParams<{cat?: string}>();
   const { availableTrades } = useApp();
   const [picked, setPicked] = useState<string[]>([]);
   const [note, setNote]     = useState('');
   const [busy, setBusy]     = useState(false);
   const [done, setDone]     = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
-  // only offer what we can't already do
-  const missing = CATEGORIES
+  // Someone standing next to a broken car does not want to be offered a
+  // painter. When this screen is opened from inside a category we stay there,
+  // and only widen out if they ask.
+  const here = catParam ? findCategory(catParam) : null;
+
+  const groupsFor = (ids: string[]) => CATEGORIES
+    .filter(c => ids.includes(c.id))
     .map(cat => ({ cat, items: tradesIn(cat.id).filter(t => !availableTrades.includes(t.id)) }))
     .filter(g => g.items.length > 0);
+
+  const scoped   = here && !showAll;
+  const missing  = scoped
+    ? groupsFor([here!.id])
+    : groupsFor(CATEGORIES.map(c => c.id));
+
+  // what else we could widen to, if they want it
+  const elsewhere = here
+    ? groupsFor(CATEGORIES.map(c=>c.id).filter(id => id !== here.id))
+    : [];
 
   const toggle = (id: string) =>
     setPicked(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
@@ -37,9 +54,11 @@ export default function RequestService() {
               .concat(...CATEGORIES.map(c=>tradesIn(c.id)))
               .find(t=>t.id===id)?.name || id,
             note: note.trim() || null,
+            from_category: here?.id ?? null,
           }))
         : [{ user_id: user?.id ?? null, category_id: 'other',
-             category_name: 'Other', note: note.trim() }];
+             category_name: 'Other', note: note.trim(),
+             from_category: here?.id ?? null }];
       await supabase.from('service_interest').insert(rows);
     } catch (e) { /* the thank-you is the point */ }
     setBusy(false);
@@ -55,8 +74,11 @@ export default function RequestService() {
           We bring new trades on in the order people ask for them.
           You'll get a message the moment someone covers what you need.
         </Text>
-        <TouchableOpacity style={s.doneBtn} onPress={()=>router.replace('/(tabs)/home')}>
-          <Text style={s.doneBtnTxt}>Back to home</Text>
+        <TouchableOpacity style={s.doneBtn} onPress={()=>{
+          if (router.canGoBack()) router.back();
+          else router.replace('/(tabs)/home');
+        }}>
+          <Text style={s.doneBtnTxt}>{here ? 'Back' : 'Back to home'}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -71,11 +93,27 @@ export default function RequestService() {
       </View>
 
       <ScrollView style={s.body} showsVerticalScrollIndicator={false}>
-        <Text style={s.intro}>What do you need?</Text>
-        <Text style={s.hint}>
-          Pick anything below, or just describe it. We use these requests to decide
-          which trades to sign up next.
+        <Text style={s.intro}>
+          {scoped ? `What else do you need?` : 'What do you need?'}
         </Text>
+        <Text style={s.hint}>
+          {scoped
+            ? `Nobody covers these in ${here!.name.toLowerCase()} yet. Tell us which and we'll message you the moment someone does.`
+            : "Pick anything below, or just describe it. We use these requests to decide which trades to sign up next."}
+        </Text>
+
+        {missing.length === 0 && (
+          <View style={s.coveredBox}>
+            <Text style={s.coveredIcon}>✓</Text>
+            <Text style={s.coveredTitle}>
+              {scoped ? `Everything in ${here!.name.toLowerCase()} is covered`
+                      : 'Every trade is covered'}
+            </Text>
+            <Text style={s.coveredTxt}>
+              If you need something we don't list at all, describe it below.
+            </Text>
+          </View>
+        )}
 
         {missing.map(({cat, items})=>(
           <View key={cat.id} style={s.group}>
@@ -96,9 +134,22 @@ export default function RequestService() {
           </View>
         ))}
 
+        {scoped && elsewhere.length > 0 && (
+          <TouchableOpacity style={s.widenRow} onPress={()=>setShowAll(true)}>
+            <Text style={s.widenTxt}>
+              Looking for something else entirely?
+            </Text>
+            <Text style={s.widenGo}>Show every trade  ›</Text>
+          </TouchableOpacity>
+        )}
+
         <Text style={s.lbl}>Anything else?</Text>
         <TextInput style={s.input} value={note} onChangeText={setNote}
-          placeholder="e.g. I need someone to fit a water softener in Sliema"
+          placeholder={scoped && here!.id === 'vehicle'
+            ? 'e.g. my van needs a new windscreen, I am in Mosta'
+            : scoped
+            ? `e.g. something in ${here!.name.toLowerCase()} we don't list yet`
+            : 'e.g. I need someone to fit a water softener in Sliema'}
           placeholderTextColor={C.muted} multiline textAlignVertical="top" />
 
         <View style={{height:20}}/>
@@ -134,6 +185,18 @@ const s = StyleSheet.create({
   pillOn:{backgroundColor:C.primary,borderColor:C.primary},
   pillTxt:{fontSize:12,fontWeight:'600',color:C.muted},
   pillTxtOn:{color:C.white},
+  coveredBox:{backgroundColor:C.greenLt,borderRadius:16,padding:18,gap:7,
+    alignItems:'center',marginBottom:18,borderWidth:1,borderColor:'#A7F3D0'},
+  coveredIcon:{fontSize:28,color:C.green,fontWeight:'800'},
+  coveredTitle:{fontSize:15,fontWeight:'800',color:C.green,textAlign:'center'},
+  coveredTxt:{fontSize:12,color:C.text,textAlign:'center',lineHeight:18},
+
+  widenRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',
+    gap:10,backgroundColor:C.white,borderRadius:14,padding:14,marginTop:4,
+    borderWidth:1,borderStyle:'dashed',borderColor:C.border},
+  widenTxt:{flex:1,fontSize:13,color:C.text},
+  widenGo:{fontSize:12,color:C.primary,fontWeight:'700'},
+
   lbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginTop:10,marginBottom:8},
   input:{backgroundColor:C.white,borderRadius:14,padding:16,fontSize:15,color:C.text,borderWidth:1.5,borderColor:C.border,minHeight:100},
   footer:{paddingHorizontal:20,paddingVertical:16,backgroundColor:C.white,borderTopWidth:1,borderTopColor:C.border},
