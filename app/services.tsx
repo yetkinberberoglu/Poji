@@ -84,7 +84,7 @@ export default function Services() {
             We're signing providers up across Malta. Tell us what you need and
             we'll message you when someone can do it.
           </Text>
-          <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push('/request?cat=' + (category || ''))}>
+          <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push({ pathname: '/request', params: { cat: category || '' } })}>
             <Text style={s.emptyBtnTxt}>Tell us what you need</Text>
           </TouchableOpacity>
         </View>
@@ -107,7 +107,7 @@ export default function Services() {
       })}
 
       {trades.length > 0 && (
-        <TouchableOpacity style={s.requestRow} onPress={()=>router.push('/request?cat=' + (category || ''))}>
+        <TouchableOpacity style={s.requestRow} onPress={()=>router.push({ pathname: '/request', params: { cat: category || '' } })}>
           <Text style={s.requestIcon}>💬</Text>
           <View style={{flex:1}}>
             <Text style={s.requestTitle}>Something else in {cat.name.toLowerCase()}?</Text>

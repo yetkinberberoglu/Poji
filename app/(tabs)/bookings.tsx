@@ -357,8 +357,6 @@ export default function Bookings() {
                 <QuotePanel
                   booking={b}
                   role="client"
-                  busy={isBusy}
-                  onRespond={(ok)=>doQuoteReply(b.id, ok)}
                 />
               )}
 

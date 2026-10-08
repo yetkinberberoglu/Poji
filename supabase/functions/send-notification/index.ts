@@ -70,10 +70,12 @@ function buildMessage(template: string, d: Record<string, any>): string {
 
     case 'quote_sent':
       return `💬 *${d.cleanerName} has quoted you*\n\n`
-        + `*€${d.amount}* all in.\n\n`
+        + `*€${d.amount}* all in — VAT and card fee included.\n\n`
         + (d.note ? `"${d.note}"\n\n` : '')
-        + `Nothing is charged until the work is done and you approve it. `
-        + `Open Poji to accept or decline: ${d.appUrl}`;
+        + `You can accept it, make a lower offer, or wait and compare `
+        + `other quotes. Nothing is charged until the work is done and `
+        + `you approve it.\n\n`
+        + `Open Poji: ${d.appUrl}`;
 
     case 'quote_accepted':
       return `✅ *Quote accepted*\n\n`
@@ -82,8 +84,45 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `You're good to go.`;
 
     case 'quote_declined':
-      return `😕 *The client declined your quote*\n\n`
-        + `${d.address} — the job is cancelled. Nobody travelled, nobody is charged.`;
+      return `😕 *Your quote wasn't chosen*\n\n`
+        + `${d.address} — the client went another way this time. `
+        + `Nobody travelled, nobody is charged.\n\n`
+        + `Plenty more coming: ${d.appUrl}`;
+
+    case 'quote_countered':
+      return `💰 *The client made you an offer*\n\n`
+        + `📍 ${d.address}\n`
+        + `You quoted €${d.yourQuote} — they're offering *€${d.amount}*.\n\n`
+        + (d.note ? `"${d.note}"\n\n` : '')
+        + `Accept and the job is yours straight away. Say no and your `
+        + `original price stays on the table.\n\n`
+        + `Open Poji: ${d.appUrl}`;
+
+    case 'counter_accepted':
+      return `✅ *${d.cleanerName} accepted your offer*\n\n`
+        + `€${d.amount} · ${d.date} at ${d.time}\n`
+        + `📍 ${d.address}\n\n`
+        + `The job is booked. Your card is only held — money moves after `
+        + `you confirm the work is done.`;
+
+    case 'counter_declined':
+      return `💬 *${d.cleanerName} is holding their price*\n\n`
+        + `Their quote of *€${d.amount}* is still open, so you can `
+        + `accept it, or go with another quote.\n\n`
+        + `Open Poji: ${d.appUrl}`;
+
+    case 'all_quotes_declined':
+      return `🔄 *This job is open again*\n\n`
+        + `📍 ${d.address}\n`
+        + `📅 ${d.date} at ${d.time}\n\n`
+        + `The client didn't go with the quotes they had. If you can do it, `
+        + `send yours: ${d.appUrl}`;
+
+    case 'new_message':
+      return `💬 *${d.senderName || 'New message'}*\n\n`
+        + (d.photo ? `📷 Sent a photo\n\n` : '')
+        + (d.preview ? `"${d.preview}"\n\n` : '')
+        + `Reply in Poji: ${d.appUrl}`;
 
     case 'no_show_recorded':
       return `⚠️ *A client reported that you didn't arrive*\n\n`
@@ -127,7 +166,10 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `Update your details and resubmit: ${d.appUrl}`;
 
     default:
-      return d.body || 'Poji notification';
+      // A template we haven't written copy for yet. Never send an empty
+      // message — say something true and point them at the app.
+      return d.body
+        || `🔔 *Poji*\n\nThere's an update on your job.\n\n${d.appUrl}`;
   }
 }
 

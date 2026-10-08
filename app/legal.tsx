@@ -8,7 +8,7 @@ const COMPANY = 'Pojico Ltd';
 const EMAIL   = 'supportpoji@gmail.com';
 const SITE    = 'po-ji.com';
 
-type Section = { h: string; p?: string[]; bullets?: string[]; table?: [string,string][] };
+type Section = { h: string; p?: string[]; bullets?: string[]; table?: [string,string][]; p2?: boolean; p2b?: boolean };
 
 const PRIVACY: Section[] = [
   {

@@ -1,295 +1,528 @@
+// components/QuotePanel.tsx
+// Teklif toplama + karsi teklif. Hicbir para hesabi burada yapilmaz;
+// butun rakamlar Postgres'ten gelir (lib/quotes.ts -> rpc).
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator
+  ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
-import { useState } from 'react';
-import { C, S } from '../constants/theme';
-import { fixedQuote } from '../lib/services';
+import { supabase } from '../lib/supabase';
+import {
+  Quote, acceptQuote, counterQuote, declineQuote, euro, isLive, listQuotes,
+  quoteError, respondCounter, sendQuote, timeLeft, watchQuotes, checkRange, noteRequired,
+} from '../lib/quotes';
+import { PublicProvider, publicProviders } from '../lib/providers';
 
-const money = (n:number) => '€' + (Number(n)||0).toFixed(2);
+const ACCENT = '#0F766E';   // marka rengin neyse burayi degistir
+const DANGER = '#B42318';
+const WARN   = '#B54708';
+const INK    = '#101828';
+const MUTED  = '#667085';
+const LINE   = '#E4E7EC';
 
-/**
- * Jobs nobody can price blind — a locked car, a dead washing machine.
- * The two sides talk first, then the provider sends a figure and the
- * client accepts before anyone sets off.
- */
-export default function QuotePanel({
-  booking, role, range, onSend, onRespond, busy,
-}: {
-  booking: any;
-  role: 'provider' | 'client';
-  range?: { min?: number|null; max?: number|null };
-  onSend?: (labour: number, parts: number, note: string) => void;
-  onRespond?: (accept: boolean) => void;
-  busy?: boolean;
-}) {
-  const [open, setOpen]     = useState(false);
-  const [labour, setLabour] = useState('');
-  const [parts, setParts]   = useState('');
-  const [note, setNote]     = useState('');
-  const [error, setError]   = useState('');
+type Props = {
+  booking?: any;                      // mevcut cagri sekli korunuyor
+  bookingId?: string;
+  role?: 'client' | 'provider';
+  min?: number | null;                // ilanda yazan aralik
+  max?: number | null;
+  ttlMinutes?: number | null;         // teklifin gecerlilik suresi
+  onChanged?: () => void;
+};
 
-  const quoted = booking.status === 'quoted' && booking.quoteAmount != null;
+export default function QuotePanel(props: Props) {
+  const b = props.booking;
+  const bookingId: string | undefined = b?.id ?? props.bookingId;
+  // booking objesi bazi ekranlarda camelCase geliyor, ikisini de kabul et
+  const rangeMin = props.min ?? b?.quote_min ?? b?.quoteMin ?? b?.price_min ?? b?.priceMin ?? null;
+  const rangeMax = props.max ?? b?.quote_max ?? b?.quoteMax ?? b?.price_max ?? b?.priceMax ?? null;
+  const ttl = props.ttlMinutes ?? b?.quote_ttl_minutes ?? b?.quoteTtlMinutes ?? null;
 
-  // ── already quoted ──
-  if (quoted) {
-    const q = fixedQuote({
-      labourPrice: Number(booking.quoteAmount) || 0,
-      partsPrice:  Number(booking.quoteParts) || 0,
-    });
+  const [me, setMe] = useState<string | null>(null);
+  const [role, setRole] = useState<'client' | 'provider' | null>(props.role ?? null);
+  const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [people, setPeople] = useState<Record<string, PublicProvider>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-    if (role === 'provider') {
-      return (
-        <View style={s.sentBox}>
-          <Text style={s.sentTitle}>⏳  Quote sent — waiting on the client</Text>
-          <View style={s.sumRow}>
-            <Text style={s.sumLbl}>Your work</Text>
-            <Text style={s.sumVal}>{money(Number(booking.quoteAmount))}</Text>
-          </View>
-          {Number(booking.quoteParts) > 0 && (
-            <View style={s.sumRow}>
-              <Text style={s.sumLbl}>Parts</Text>
-              <Text style={s.sumVal}>{money(Number(booking.quoteParts))}</Text>
-            </View>
-          )}
-          <View style={s.sumRow}>
-            <Text style={s.sumLbl}>You keep</Text>
-            <Text style={[s.sumVal,{color:C.green,fontWeight:'800'}]}>
-              {money(q.providerGets)}
-            </Text>
-          </View>
-          {!!booking.quoteNote && (
-            <Text style={s.sentNote}>"{booking.quoteNote}"</Text>
-          )}
-          <Text style={s.sentHint}>
-            Don't travel until they accept. If they decline, the job is cancelled
-            and nobody is charged.
-          </Text>
-        </View>
-      );
+  // ---- yukleme ----------------------------------------------------
+  const load = useCallback(async () => {
+    if (!bookingId) return;
+    try {
+      const rows = await listQuotes(bookingId);
+      setQuotes(rows);
+      const map = await publicProviders(rows.map((q) => q.provider_id));
+      setPeople(map);
+    } catch (e: any) {
+      setErr(quoteError(e));
+    } finally {
+      setLoading(false);
     }
+  }, [bookingId]);
 
-    return (
-      <View style={s.offerBox}>
-        <Text style={s.offerTitle}>💬  Your provider has quoted</Text>
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const uid = data?.user?.id ?? null;
+      if (!alive) return;
+      setMe(uid);
+      if (!props.role) {
+        const clientId = b?.client_id ?? b?.clientId;
+        setRole(clientId && uid && clientId === uid ? 'client' : 'provider');
+      }
+      await load();
+    })();
+    return () => { alive = false; };
+  }, [load, props.role, b?.client_id, b?.clientId]);
 
-        <View style={s.offerCard}>
-          {[
-            ['The work', money(q.labour)],
-            ...(q.parts > 0 ? [['Parts', money(q.parts)]] : []),
-            ['VAT 18%', money(q.vat)],
-            ['Card fee', money(q.stripeFee)],
-          ].map(([l,v])=>(
-            <View key={String(l)} style={s.offerRow}>
-              <Text style={s.offerLbl}>{l}</Text>
-              <Text style={s.offerVal}>{v}</Text>
-            </View>
-          ))}
-          <View style={s.offerTotal}>
-            <Text style={s.offerTotalLbl}>You pay</Text>
-            <Text style={s.offerTotalVal}>{money(q.clientPays)}</Text>
-          </View>
-        </View>
+  useEffect(() => {
+    if (!bookingId) return;
+    return watchQuotes(bookingId, load);
+  }, [bookingId, load]);
 
-        {!!booking.quoteNote && (
-          <View style={s.noteBox}>
-            <Text style={s.noteTxt}>"{booking.quoteNote}"</Text>
-          </View>
-        )}
-
-        <Text style={s.offerHint}>
-          Nothing is charged until the work is done and you approve it. Decline and
-          the job is cancelled — no fee, nobody travels.
-        </Text>
-
-        <View style={s.btnRow}>
-          <TouchableOpacity style={[s.noBtn, busy&&s.dis]} disabled={busy}
-            onPress={()=>onRespond?.(false)}>
-            <Text style={s.noTxt}>Decline</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.yesBtn, busy&&s.dis]} disabled={busy}
-            onPress={()=>onRespond?.(true)}>
-            {busy ? <ActivityIndicator color={C.white} size="small"/>
-              : <Text style={s.yesTxt}>Accept {money(q.clientPays)}</Text>}
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ── client waiting for a quote ──
-  if (role === 'client') {
-    return (
-      <View style={s.waitBox}>
-        <Text style={s.waitTitle}>💬  Your provider will quote you</Text>
-        <Text style={s.waitTxt}>
-          This job can't be priced sight unseen. Message them with the details —
-          they'll send a figure and you decide before anyone travels.
-        </Text>
-        {range?.min && range?.max && (
-          <Text style={s.waitRange}>
-            They work in the range {money(range.min)} – {money(range.max)}.
-          </Text>
-        )}
-      </View>
-    );
-  }
-
-  // ── provider writing a quote ──
-  const preview = Number(labour) > 0 ? fixedQuote({
-    labourPrice: Number(labour),
-    partsPrice: Number(parts) || 0,
-  }) : null;
-
-  const send = () => {
-    const l = Number(labour);
-    if (!l || l <= 0)  { setError('What are you charging for the work?'); return; }
-    if (l > 5000)      { setError('That looks very high — check the figure'); return; }
-    onSend?.(l, Number(parts) || 0, note.trim());
+  const run = async (key: string, fn: () => Promise<any>) => {
+    setErr(null); setBusy(key);
+    try { await fn(); await load(); props.onChanged?.(); }
+    catch (e: any) { setErr(quoteError(e)); }
+    finally { setBusy(null); }
   };
 
-  if (!open) {
+  if (!bookingId) return null;
+  if (loading) {
+    return <View style={s.center}><ActivityIndicator color={ACCENT} /></View>;
+  }
+
+  return (
+    <View style={s.wrap}>
+      {err ? <View style={s.errBox}><Text style={s.errText}>{err}</Text></View> : null}
+      {role === 'client'
+        ? <ClientSide
+            quotes={quotes} people={people} busy={busy} run={run}
+            rangeMin={rangeMin} rangeMax={rangeMax} />
+        : <ProviderSide
+            bookingId={bookingId} me={me} quotes={quotes} busy={busy} run={run}
+            rangeMin={rangeMin} rangeMax={rangeMax} ttl={ttl} />}
+    </View>
+  );
+}
+
+/* ================================================================ MUSTERI */
+
+function ClientSide({ quotes, people, busy, run, rangeMin, rangeMax }: any) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [total, setTotal] = useState('');
+  const [note, setNote] = useState('');
+
+  const live: Quote[] = useMemo(() => quotes.filter(isLive), [quotes]);
+  const dead: Quote[] = useMemo(() => quotes.filter((q: Quote) => !isLive(q)), [quotes]);
+  const best = live.length ? Math.min(...live.map((q) => q.client_pays)) : null;
+
+  if (!quotes.length) {
     return (
-      <View style={s.promptBox}>
-        <Text style={s.promptTitle}>💬  Talk first, then quote</Text>
-        <Text style={s.promptTxt}>
-          Ask whatever you need to price this properly. When you know the figure,
-          send it — the client accepts before you travel.
+      <View style={s.empty}>
+        <Text style={s.emptyTitle}>Waiting for quotes</Text>
+        <Text style={s.emptyBody}>
+          Providers in your area are looking at your job now. You will get a
+          notification as each quote arrives, then you pick the one you want.
+          Nothing is charged until you accept.
         </Text>
-        {range?.min && range?.max && (
-          <Text style={s.promptRange}>
-            Your listed range: {money(range.min)} – {money(range.max)}
-          </Text>
-        )}
-        <TouchableOpacity style={s.openBtn} onPress={()=>setOpen(true)}>
-          <Text style={s.openTxt}>Send a quote</Text>
-        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={s.formBox}>
-      <Text style={s.formTitle}>Your quote</Text>
-
-      <Text style={s.lbl}>For the work (€)</Text>
-      <TextInput style={s.input} value={labour}
-        onChangeText={(t)=>{setLabour(t.replace(/[^0-9.]/g,''));setError('');}}
-        keyboardType="decimal-pad" placeholder="180" placeholderTextColor={C.muted} autoFocus />
-
-      <Text style={s.lbl}>Parts, if any (€)</Text>
-      <TextInput style={s.input} value={parts}
-        onChangeText={(t)=>setParts(t.replace(/[^0-9.]/g,''))}
-        keyboardType="decimal-pad" placeholder="0" placeholderTextColor={C.muted} />
-
-      <Text style={s.lbl}>Explain the price</Text>
-      <TextInput style={[s.input,{minHeight:80}]} value={note} onChangeText={setNote}
-        placeholder="Mercedes with a transponder key — needs decoding and programming, about two hours"
-        placeholderTextColor={C.muted} multiline textAlignVertical="top" />
-      <Text style={s.note}>
-        People accept a price they understand. Say what makes this job what it is.
+    <ScrollView>
+      <Text style={s.h1}>
+        {live.length} quote{live.length === 1 ? '' : 's'}
+      </Text>
+      <Text style={s.sub}>
+        Prices include VAT and card fees — what you see is what you pay.
+        Your card is only held; money moves after you confirm the work is done.
       </Text>
 
-      {preview && (
-        <View style={s.previewBox}>
-          <View style={s.previewRow}>
-            <Text style={s.previewLbl}>Client pays</Text>
-            <Text style={s.previewVal}>{money(preview.clientPays)}</Text>
-          </View>
-          <View style={s.previewRow}>
-            <Text style={s.previewLbl}>You keep</Text>
-            <Text style={[s.previewVal,{color:C.green,fontWeight:'800'}]}>
-              {money(preview.providerGets)}
+      {live.map((q) => {
+        const p = people[q.provider_id];
+        const open = openId === q.id;
+        const asked = Number(total || 0);
+        const chk = checkRange(asked, rangeMin, rangeMax);
+        const blocked = !asked || asked >= q.client_pays || noteRequired(chk, note);
+
+        return (
+          <View key={q.id} style={[s.card, q.client_pays === best && s.cardBest]}>
+            {q.client_pays === best && live.length > 1
+              ? <Text style={s.badge}>Lowest price</Text> : null}
+
+            <View style={s.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.name}>{p?.name ?? 'Provider'}</Text>
+                <Text style={s.meta}>
+                  {p?.rating != null ? `${p.rating.toFixed(1)} ★` : 'New to Poji'}
+                  {p?.jobs ? `  ·  ${p.jobs} jobs` : ''}
+                  {`  ·  ${timeLeft(q)}`}
+                </Text>
+              </View>
+              <Text style={s.price}>{euro(q.client_pays)}</Text>
+            </View>
+
+            <Text style={s.break}>
+              Labour {euro(q.labour)}
+              {q.parts > 0 ? `  +  parts ${euro(q.parts)}` : '  ·  no parts needed'}
             </Text>
+
+            {q.note ? <Text style={s.note}>{q.note}</Text> : null}
+
+            {q.status === 'countered' ? (
+              <View style={s.pending}>
+                <Text style={s.pendingText}>
+                  You offered {euro(q.counter_total ?? 0)} — waiting for an answer.
+                </Text>
+              </View>
+            ) : open ? (
+              <View style={s.counterBox}>
+                <Text style={s.label}>Your offer (total you would pay)</Text>
+                <TextInput
+                  style={s.input}
+                  keyboardType="decimal-pad"
+                  placeholder={`Less than ${euro(q.client_pays)}`}
+                  placeholderTextColor={MUTED}
+                  value={total}
+                  onChangeText={setTotal}
+                />
+                {asked >= q.client_pays && asked > 0 ? (
+                  <Text style={s.warn}>Your offer has to be lower than {euro(q.client_pays)}.</Text>
+                ) : null}
+                {chk.out ? <Text style={s.warn}>{chk.message}</Text> : null}
+
+                <Text style={s.label}>Note {chk.out ? '(required)' : '(optional)'}</Text>
+                <TextInput
+                  style={[s.input, s.multi]}
+                  multiline
+                  placeholder="Tell the provider why — it makes a yes more likely."
+                  placeholderTextColor={MUTED}
+                  value={note}
+                  onChangeText={setNote}
+                />
+                <View style={s.row}>
+                  <Pressable
+                    style={[s.btn, s.btnGhost, { flex: 1 }]}
+                    onPress={() => { setOpenId(null); setTotal(''); setNote(''); }}>
+                    <Text style={s.btnGhostText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={blocked || busy === q.id}
+                    style={[s.btn, s.btnMain, { flex: 1 }, blocked && s.btnOff]}
+                    onPress={() => run(q.id, async () => {
+                      await counterQuote(q.id, asked, note.trim() || undefined);
+                      setOpenId(null); setTotal(''); setNote('');
+                    })}>
+                    <Text style={s.btnMainText}>
+                      {busy === q.id ? 'Sending…' : 'Send offer'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <View style={s.row}>
+                <Pressable
+                  disabled={!!busy}
+                  style={[s.btn, s.btnMain, { flex: 1.4 }]}
+                  onPress={() => run(q.id, () => acceptQuote(q.id))}>
+                  <Text style={s.btnMainText}>
+                    {busy === q.id ? 'Booking…' : `Accept ${euro(q.client_pays)}`}
+                  </Text>
+                </Pressable>
+                <Pressable style={[s.btn, s.btnGhost, { flex: 1 }]} onPress={() => setOpenId(q.id)}>
+                  <Text style={s.btnGhostText}>Counter</Text>
+                </Pressable>
+                <Pressable
+                  disabled={!!busy}
+                  style={[s.btn, s.btnGhost]}
+                  onPress={() => run(q.id, () => declineQuote(q.id))}>
+                  <Text style={[s.btnGhostText, { color: DANGER }]}>Decline</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
-          <Text style={s.previewNote}>20% on the work, 5% on the parts.</Text>
+        );
+      })}
+
+      {live.length > 1 ? (
+        <Text style={s.footnote}>
+          Accepting one quote automatically declines the others. The cheapest is
+          not always the best — check the rating and what the note says is included.
+        </Text>
+      ) : null}
+
+      {dead.length ? (
+        <View style={{ marginTop: 18 }}>
+          <Text style={s.h2}>Closed</Text>
+          {dead.map((q: Quote) => (
+            <View key={q.id} style={[s.card, s.cardDead]}>
+              <View style={s.row}>
+                <Text style={[s.name, { flex: 1 }]}>{people[q.provider_id]?.name ?? 'Provider'}</Text>
+                <Text style={s.deadPrice}>{euro(q.client_pays)}</Text>
+              </View>
+              <Text style={s.meta}>
+                {q.status === 'accepted' ? 'Accepted' :
+                 q.status === 'declined' ? 'Declined' :
+                 q.status === 'withdrawn' ? 'Withdrawn by provider' : 'Expired'}
+              </Text>
+            </View>
+          ))}
         </View>
-      )}
+      ) : null}
+    </ScrollView>
+  );
+}
 
-      {error ? <Text style={s.err}>{error}</Text> : null}
+/* ============================================================== SAGLAYICI */
 
-      <View style={s.btnRow}>
-        <TouchableOpacity style={s.cancelBtn} onPress={()=>{setOpen(false);setError('');}}>
-          <Text style={s.cancelTxt}>Back</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[s.sendBtn, busy&&s.dis]} disabled={busy} onPress={send}>
-          {busy ? <ActivityIndicator color={C.white} size="small"/>
-            : <Text style={s.sendTxt}>Send quote</Text>}
-        </TouchableOpacity>
+function ttlText(m?: number | null): string {
+  if (!m) return 'Quotes expire automatically \u2014 send yours while the job is fresh.';
+  if (m <= 120) return `This one is urgent: your quote expires in ${m} minutes.`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `Your quote stays open for ${h} hours.`;
+  const d = Math.round(h / 24);
+  return `Your quote stays open for ${d} day${d === 1 ? '' : 's'}.`;
+}
+
+function ProviderSide({ bookingId, me, quotes, busy, run, rangeMin, rangeMax, ttl }: any) {
+  const mine: Quote | undefined = useMemo(
+    () => quotes.find((q: Quote) => q.provider_id === me), [quotes, me]);
+
+  const [labour, setLabour] = useState(mine ? String(mine.labour) : '');
+  const [parts, setParts] = useState(mine && mine.parts > 0 ? String(mine.parts) : '');
+  const [note, setNote] = useState(mine?.note ?? '');
+  const [pv, setPv] = useState<{ total: number; gets: number } | null>(null);
+  const timer = useRef<any>(null);
+  const synced = useRef<string | null>(null);
+
+  // Teklifler asenkron geliyor: mevcut teklif yuklenince formu doldur.
+  useEffect(() => {
+    if (mine && synced.current !== mine.id) {
+      synced.current = mine.id;
+      setLabour(String(mine.labour));
+      setParts(mine.parts > 0 ? String(mine.parts) : '');
+      setNote(mine.note ?? '');
+    }
+  }, [mine]);
+
+  // On izleme: rakamlari sunucuya sorar, boylece gosterilen tutar
+  // isin sonunda tahsil edilecek tutarin aynisi olur.
+  useEffect(() => {
+    const L = Number(labour || 0), P = Number(parts || 0);
+    if (!L) { setPv(null); return; }
+    clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      const [a, b] = await Promise.all([
+        supabase.rpc('poji_client_pays', { p_labour: L, p_parts: P }),
+        supabase.rpc('poji_provider_gets', { p_labour: L, p_parts: P }),
+      ]);
+      if (!a.error && !b.error) setPv({ total: Number(a.data), gets: Number(b.data) });
+    }, 350);
+    return () => clearTimeout(timer.current);
+  }, [labour, parts]);
+
+  const chk = checkRange(pv?.total ?? 0, rangeMin, rangeMax);
+  const blocked = !Number(labour || 0) || noteRequired(chk, note);
+
+  // Karsi teklif bekliyor
+  if (mine?.status === 'countered') {
+    return (
+      <View style={s.card}>
+        <Text style={s.h2}>The client made an offer</Text>
+        <View style={s.row}>
+          <Text style={[s.break, { flex: 1 }]}>Your quote was {euro(mine.client_pays)}</Text>
+          <Text style={s.price}>{euro(mine.counter_total ?? 0)}</Text>
+        </View>
+        {mine.counter_note ? <Text style={s.note}>{mine.counter_note}</Text> : null}
+        <Text style={s.sub}>
+          Accept and the job is yours straight away — no second confirmation needed.
+          Keep your price and the client can still accept the original quote.
+        </Text>
+        <View style={s.row}>
+          <Pressable
+            disabled={!!busy}
+            style={[s.btn, s.btnMain, { flex: 1.3 }]}
+            onPress={() => run(mine.id, () => respondCounter(mine.id, true))}>
+            <Text style={s.btnMainText}>
+              {busy === mine.id ? 'Working…' : `Accept ${euro(mine.counter_total ?? 0)}`}
+            </Text>
+          </Pressable>
+          <Pressable
+            disabled={!!busy}
+            style={[s.btn, s.btnGhost, { flex: 1 }]}
+            onPress={() => run(mine.id, () => respondCounter(mine.id, false))}>
+            <Text style={s.btnGhostText}>Keep my price</Text>
+          </Pressable>
+        </View>
       </View>
+    );
+  }
+
+  if (mine?.status === 'accepted') {
+    return (
+      <View style={[s.card, s.cardBest]}>
+        <Text style={s.h2}>Quote accepted</Text>
+        <Text style={s.break}>
+          You receive {euro(mine.provider_gets)} for this job. The client has been charged a hold
+          of {euro(mine.client_pays)}.
+        </Text>
+      </View>
+    );
+  }
+
+  if (mine && (mine.status === 'declined' || mine.status === 'withdrawn')) {
+    return (
+      <View style={[s.card, s.cardDead]}>
+        <Text style={s.h2}>
+          {mine.status === 'declined' ? 'Not selected' : 'Quote withdrawn'}
+        </Text>
+        <Text style={s.meta}>
+          {mine.status === 'declined'
+            ? 'The client went with another provider this time.'
+            : 'You pulled this quote. You can send a new one.'}
+        </Text>
+      </View>
+    );
+  }
+
+  const others = quotes.filter((q: Quote) => q.provider_id !== me && isLive(q)).length;
+
+  return (
+    <View style={s.card}>
+      <Text style={s.h2}>{mine ? 'Update your quote' : 'Send a quote'}</Text>
+      <Text style={s.sub}>
+        {others > 0
+          ? `${others} other provider${others === 1 ? ' has' : 's have'} quoted. The client sees every quote and picks one.`
+          : 'You are the first to quote. The client can accept, counter, or wait for more.'}
+        {rangeMin != null && rangeMax != null
+          ? `  Clients were shown ${euro(rangeMin)}–${euro(rangeMax)} for this service.`
+          : ''}
+      </Text>
+
+      <Text style={s.label}>Your labour price</Text>
+      <TextInput
+        style={s.input} keyboardType="decimal-pad" placeholder="0.00"
+        placeholderTextColor={MUTED} value={labour} onChangeText={setLabour} />
+
+      <Text style={s.label}>Parts or materials (leave empty if none)</Text>
+      <TextInput
+        style={s.input} keyboardType="decimal-pad" placeholder="0.00"
+        placeholderTextColor={MUTED} value={parts} onChangeText={setParts} />
+
+      {pv ? (
+        <View style={s.preview}>
+          <View style={s.row}>
+            <Text style={[s.previewLabel, { flex: 1 }]}>Client pays</Text>
+            <Text style={s.previewValue}>{euro(pv.total)}</Text>
+          </View>
+          <View style={s.row}>
+            <Text style={[s.previewLabel, { flex: 1 }]}>You receive</Text>
+            <Text style={[s.previewValue, { color: ACCENT }]}>{euro(pv.gets)}</Text>
+          </View>
+          <Text style={s.previewFoot}>
+            The difference is VAT, the card fee and Poji's commission — 20% on labour, 5% on parts.
+          </Text>
+        </View>
+      ) : null}
+
+      {chk.out ? <Text style={s.warn}>{chk.message}</Text> : null}
+
+      <Text style={s.label}>
+        What the price covers {chk.out ? '(required)' : '(optional, but it wins jobs)'}
+      </Text>
+      <TextInput
+        style={[s.input, s.multi]} multiline
+        placeholder="e.g. Full service, new filter fitted, 6-month guarantee. Two hours on site."
+        placeholderTextColor={MUTED} value={note} onChangeText={setNote} />
+
+      <Pressable
+        disabled={blocked || !!busy}
+        style={[s.btn, s.btnMain, blocked && s.btnOff]}
+        onPress={() => run('send', () =>
+          sendQuote(bookingId, Number(labour), Number(parts || 0), note.trim() || undefined))}>
+        <Text style={s.btnMainText}>
+          {busy === 'send' ? 'Sending…' : mine ? 'Update quote' : 'Send quote'}
+        </Text>
+      </Pressable>
+
+      {mine ? (
+        <Pressable
+          disabled={!!busy}
+          style={[s.btn, s.btnGhost, { marginTop: 8 }]}
+          onPress={() => run(mine.id, () => declineQuote(mine.id))}>
+          <Text style={[s.btnGhostText, { color: DANGER }]}>Withdraw my quote</Text>
+        </Pressable>
+      ) : null}
+
+      <Text style={s.footnote}>{ttlText(ttl)}</Text>
     </View>
   );
 }
 
+/* ================================================================= STIL */
+
 const s = StyleSheet.create({
-  promptBox:{backgroundColor:C.tealLt,borderRadius:14,padding:14,gap:8,
-    borderWidth:1,borderColor:'#BAE6FD'},
-  promptTitle:{fontSize:14,fontWeight:'800',color:C.teal},
-  promptTxt:{fontSize:12,color:C.text,lineHeight:18},
-  promptRange:{fontSize:12,color:C.teal,fontWeight:'700'},
-  openBtn:{backgroundColor:C.teal,borderRadius:12,paddingVertical:13,alignItems:'center',marginTop:4},
-  openTxt:{fontSize:14,fontWeight:'700',color:C.white},
+  wrap: { gap: 12 },
+  center: { padding: 28, alignItems: 'center' },
+  h1: { fontSize: 20, fontWeight: '700', color: INK, marginBottom: 4 },
+  h2: { fontSize: 16, fontWeight: '700', color: INK, marginBottom: 6 },
+  sub: { fontSize: 13, color: MUTED, lineHeight: 19, marginBottom: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
-  formBox:{backgroundColor:C.white,borderRadius:14,padding:14,
-    borderWidth:1.5,borderColor:C.teal},
-  formTitle:{fontSize:14,fontWeight:'800',color:C.dark},
-  lbl:{fontSize:11,fontWeight:'700',color:C.muted,textTransform:'uppercase',
-    letterSpacing:0.4,marginTop:14,marginBottom:7},
-  input:{backgroundColor:C.bg,borderRadius:11,paddingHorizontal:13,paddingVertical:12,
-    fontSize:14,color:C.text,borderWidth:1.5,borderColor:C.border},
-  note:{fontSize:11,color:C.muted,marginTop:6,lineHeight:16},
-  err:{fontSize:12,color:C.red,fontWeight:'700',marginTop:10},
+  card: {
+    borderWidth: 1, borderColor: LINE, borderRadius: 14,
+    padding: 14, marginBottom: 10, backgroundColor: '#fff', gap: 8,
+  },
+  cardBest: { borderColor: ACCENT, borderWidth: 2 },
+  cardDead: { opacity: 0.55 },
+  badge: {
+    alignSelf: 'flex-start', fontSize: 11, fontWeight: '700', color: '#fff',
+    backgroundColor: ACCENT, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
+  },
 
-  previewBox:{backgroundColor:C.greenLt,borderRadius:11,padding:12,gap:6,marginTop:14,
-    borderWidth:1,borderColor:'#A7F3D0'},
-  previewRow:{flexDirection:'row',justifyContent:'space-between'},
-  previewLbl:{fontSize:12,color:C.text},
-  previewVal:{fontSize:14,fontWeight:'700',color:C.dark},
-  previewNote:{fontSize:11,color:C.muted},
+  name: { fontSize: 15, fontWeight: '700', color: INK },
+  meta: { fontSize: 12, color: MUTED },
+  price: { fontSize: 20, fontWeight: '800', color: INK },
+  deadPrice: { fontSize: 15, fontWeight: '600', color: MUTED },
+  break: { fontSize: 13, color: MUTED },
+  note: {
+    fontSize: 13, color: INK, lineHeight: 19,
+    backgroundColor: '#F9FAFB', padding: 10, borderRadius: 10,
+  },
 
-  sentBox:{backgroundColor:C.tealLt,borderRadius:14,padding:14,gap:7,
-    borderWidth:1,borderColor:'#BAE6FD'},
-  sentTitle:{fontSize:14,fontWeight:'800',color:C.teal},
-  sumRow:{flexDirection:'row',justifyContent:'space-between'},
-  sumLbl:{fontSize:12,color:C.text},
-  sumVal:{fontSize:13,fontWeight:'700',color:C.dark},
-  sentNote:{fontSize:12,color:C.text,fontStyle:'italic',lineHeight:17,marginTop:2},
-  sentHint:{fontSize:11,color:C.muted,lineHeight:16,marginTop:2},
+  label: { fontSize: 12, fontWeight: '600', color: INK, marginTop: 8, marginBottom: 4 },
+  input: {
+    borderWidth: 1, borderColor: LINE, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: INK,
+  },
+  multi: { minHeight: 70, textAlignVertical: 'top' },
 
-  waitBox:{backgroundColor:C.tealLt,borderRadius:14,padding:14,gap:6,
-    borderWidth:1,borderColor:'#BAE6FD'},
-  waitTitle:{fontSize:14,fontWeight:'800',color:C.teal},
-  waitTxt:{fontSize:12,color:C.text,lineHeight:18},
-  waitRange:{fontSize:12,color:C.teal,fontWeight:'700',marginTop:2},
+  counterBox: { borderTopWidth: 1, borderTopColor: LINE, paddingTop: 8, gap: 2 },
+  pending: { backgroundColor: '#FFFAEB', borderRadius: 10, padding: 10 },
+  pendingText: { fontSize: 13, color: WARN },
 
-  offerBox:{backgroundColor:C.tealLt,borderRadius:14,padding:14,gap:10,
-    borderWidth:1.5,borderColor:C.teal},
-  offerTitle:{fontSize:14,fontWeight:'800',color:C.teal},
-  offerCard:{backgroundColor:C.white,borderRadius:11,padding:12,
-    borderWidth:1,borderColor:C.border},
-  offerRow:{flexDirection:'row',justifyContent:'space-between',marginBottom:6},
-  offerLbl:{fontSize:12,color:C.muted},
-  offerVal:{fontSize:12,color:C.text,fontWeight:'600'},
-  offerTotal:{flexDirection:'row',justifyContent:'space-between',paddingTop:9,marginTop:3,
-    borderTopWidth:1,borderTopColor:C.border},
-  offerTotalLbl:{fontSize:14,fontWeight:'800',color:C.dark},
-  offerTotalVal:{fontSize:18,fontWeight:'800',color:C.teal},
-  noteBox:{backgroundColor:C.white,borderRadius:10,padding:11,
-    borderWidth:1,borderColor:C.border},
-  noteTxt:{fontSize:12,color:C.text,lineHeight:18,fontStyle:'italic'},
-  offerHint:{fontSize:11,color:C.text,lineHeight:16},
+  preview: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, gap: 4, marginTop: 10 },
+  previewLabel: { fontSize: 13, color: MUTED },
+  previewValue: { fontSize: 16, fontWeight: '700', color: INK },
+  previewFoot: { fontSize: 11, color: MUTED, marginTop: 4, lineHeight: 15 },
 
-  btnRow:{flexDirection:'row',gap:10,marginTop:12},
-  noBtn:{flex:1,borderWidth:1.5,borderColor:C.red,borderRadius:12,paddingVertical:12,
-    alignItems:'center',backgroundColor:C.white},
-  noTxt:{color:C.red,fontWeight:'700',fontSize:13},
-  yesBtn:{flex:1.6,backgroundColor:C.green,borderRadius:12,paddingVertical:12,
-    alignItems:'center'},
-  yesTxt:{color:C.white,fontWeight:'700',fontSize:13},
-  cancelBtn:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:12,
-    paddingVertical:12,alignItems:'center',backgroundColor:C.bg},
-  cancelTxt:{fontSize:13,fontWeight:'600',color:C.muted},
-  sendBtn:{flex:1.6,backgroundColor:C.teal,borderRadius:12,paddingVertical:12,
-    alignItems:'center'},
-  sendTxt:{fontSize:13,fontWeight:'700',color:C.white},
-  dis:{opacity:0.5},
+  btn: { borderRadius: 10, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center' },
+  btnMain: { backgroundColor: ACCENT },
+  btnMainText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  btnGhost: { borderWidth: 1, borderColor: LINE, backgroundColor: '#fff' },
+  btnGhostText: { color: INK, fontWeight: '600', fontSize: 14 },
+  btnOff: { opacity: 0.4 },
+
+  warn: { fontSize: 12, color: WARN, lineHeight: 17, marginTop: 6 },
+  errBox: { backgroundColor: '#FEF3F2', borderRadius: 10, padding: 12 },
+  errText: { color: DANGER, fontSize: 13 },
+  footnote: { fontSize: 11, color: MUTED, marginTop: 10, lineHeight: 16 },
+
+  empty: { padding: 18, borderWidth: 1, borderColor: LINE, borderRadius: 14, gap: 6 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: INK },
+  emptyBody: { fontSize: 13, color: MUTED, lineHeight: 19 },
 });

@@ -9,7 +9,19 @@ type Template =
   | 'job_finished'
   | 'job_completed'
   | 'application_approved'
-  | 'application_rejected';
+  | 'application_rejected'
+  | 'new_message'
+  | 'time_proposed'
+  | 'time_accepted'
+  | 'time_declined'
+  | 'no_show_recorded'
+  | 'quote_sent'
+  | 'quote_accepted'
+  | 'quote_declined'
+  | 'quote_countered'
+  | 'counter_accepted'
+  | 'counter_declined'
+  | 'all_quotes_declined';
 
 /**
  * Fire-and-forget notification. Never blocks the UI —

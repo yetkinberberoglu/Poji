@@ -119,8 +119,6 @@ export default function BookingScreen() {
   const isTransport = !!(svcType as any)?.is_transport;
 
   const band = bandFor(fromLoc, toLoc);
-  const myRoutePrice = (isTransport && band && vehicle)
-    ? routePrice(myEff?.routePrices, vehicle, band) : null;
 
   // For fixed and quoted work the provider's own questions decide what we ask,
   // so they have to be chosen before we can ask anything.
@@ -193,6 +191,8 @@ export default function BookingScreen() {
     svcType ? effectiveService(svcType, providerId ? prices[providerId] : null) : null;
 
   const myEff = effFor(pickedCleaner);
+  const myRoutePrice = (isTransport && band && vehicle)
+    ? routePrice(myEff?.routePrices, vehicle, band) : null;
   const qs0 = (myEff?.questions || svcType?.questions || []) as any[];
 
   // The platform's typical figures, used while they're still answering

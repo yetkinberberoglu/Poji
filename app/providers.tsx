@@ -72,7 +72,7 @@ export default function Providers() {
           </TouchableOpacity>
         </View>
       ) : list.map(p=>(
-        <TouchableOpacity key={p.id} style={s.card} onPress={()=>router.push(`/cleaner/${p.id}?trade=${trade}`)}>
+        <TouchableOpacity key={p.id} style={s.card} onPress={()=>router.push({ pathname: '/cleaner/[id]', params: { id: p.id, trade } })}>
           <View style={s.cardTop}>
             <Avatar photoUrl={(p as any).photoUrl} initials={p.initials} color={p.color} size={56} />
             <View style={{flex:1}}>
@@ -108,7 +108,7 @@ export default function Providers() {
           </View>
 
           <View style={s.cardFooter}>
-            <TouchableOpacity style={s.viewBtn} onPress={()=>router.push(`/cleaner/${p.id}?trade=${trade}`)}>
+            <TouchableOpacity style={s.viewBtn} onPress={()=>router.push({ pathname: '/cleaner/[id]', params: { id: p.id, trade } })}>
               <Text style={s.viewBtnTxt}>View profile</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.bookBtn, !p.available&&s.bookBtnDis]}

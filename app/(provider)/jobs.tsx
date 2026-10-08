@@ -59,6 +59,22 @@ export default function ProviderScreen() {
     setBusy(null);
   };
 
+  /**
+   * Jobs this provider has passed on. A pool job belongs to nobody, so
+   * passing it must only hide it from this one provider — everybody else
+   * still sees it and can take it.
+   */
+  const [passed, setPassed] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!userId) return;
+    (async () => {
+      const { data } = await supabase.from('job_passes')
+        .select('booking_id').eq('provider_id', userId);
+      setPassed(new Set((data || []).map((r:any) => r.booking_id)));
+    })();
+  }, [userId]);
+
   const [serviceTypes, setServiceTypes] = useState<Record<string, any>>({});
 
   useEffect(() => {
@@ -212,6 +228,28 @@ export default function ProviderScreen() {
     setBusy(null);
   };
 
+  /**
+   * "Pass" means two different things depending on where the job came from.
+   * Offered directly to me -> let it go to the pool, so others get a shot.
+   * Already in the pool -> nobody to hand it to; just stop showing it to me.
+   */
+  const doPass = async (b: any) => {
+    setBusy(b.id); setActionError('');
+    try {
+      if (b.status === 'pending_pool') {
+        const { error } = await supabase.from('job_passes')
+          .upsert({ booking_id: b.id, provider_id: userId });
+        if (error) throw error;
+        setPassed(prev => new Set(prev).add(b.id));
+      } else {
+        await updateStatus(b.id, 'pending_pool');
+      }
+    } catch (e: any) {
+      setActionError(e?.message || 'That did not go through');
+    }
+    setBusy(null);
+  };
+
   const doStatus = async (id: string, status: string, address?: string) => {
     setBusy(id); setActionError('');
     try {
@@ -264,6 +302,7 @@ export default function ProviderScreen() {
   const active = bookings
     .filter(b => !['cancelled','completed','disputed'].includes(b.status))
     .filter(inMyTrade)
+    .filter(b => !passed.has(b.id) || b.cleanerId === userId)
     .sort((a,b) => (b.isUrgent ? 1 : 0) - (a.isUrgent ? 1 : 0));
   const done   = bookings.filter(b => ['cancelled','completed','disputed'].includes(b.status));
   const earned = done.filter(b => b.status==='completed')
@@ -577,8 +616,6 @@ export default function ProviderScreen() {
                       <QuotePanel
                         booking={b}
                         role="provider"
-                        busy={isBusy}
-                        onSend={(l,pt,n)=>doQuote(b.id, l, pt, n)}
                       />
                     )
                   ) : myStatus !== 'approved' ? (
@@ -598,7 +635,7 @@ export default function ProviderScreen() {
                     <>
                       <View style={s0.actions}>
                         <TouchableOpacity style={[s0.rejectBtn,isBusy&&s0.dis]} disabled={isBusy}
-                          onPress={()=>doStatus(b.id,'pending_pool')}>
+                          onPress={()=>doPass(b)}>
                           <Text style={s0.rejectTxt}>✕  Pass</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={[s0.acceptBtn,isBusy&&s0.dis]} disabled={isBusy}
@@ -615,7 +652,7 @@ export default function ProviderScreen() {
               )}
 
               {b.status==='quoted' && (
-                <QuotePanel booking={b} role="provider" busy={isBusy} />
+                <QuotePanel booking={b} role="provider" />
               )}
 
               {b.status==='reschedule_proposed' && (
@@ -867,8 +904,8 @@ export default function ProviderScreen() {
                       </View>
                     </View>
                   )}
-                  <Text style={s0.waitTitle}>⏳  Waiting for client confirmation</Text>
-                  <Text style={s0.waitTxt}>
+                  <Text style={s0.confirmTitle}>⏳  Waiting for client confirmation</Text>
+                  <Text style={s0.confirmTxt}>
                     The client has 6 hours to confirm. If they don't respond, the job is auto-approved and payment is released.
                   </Text>
                   {b.autoConfirmAt && (
@@ -1157,8 +1194,8 @@ const s0 = StyleSheet.create({
   settleVal:{fontSize:13,color:C.text,fontWeight:'700'},
   settleBig:{fontSize:18,color:C.green,fontWeight:'800'},
   waitBox:{backgroundColor:C.tealLt,borderRadius:14,padding:16,gap:6,borderWidth:1,borderColor:'#BAE6FD'},
-  waitTitle:{fontSize:14,fontWeight:'800',color:C.teal},
-  waitTxt:{fontSize:12,color:C.text,lineHeight:18},
+  confirmTitle:{fontSize:14,fontWeight:'800',color:C.teal},
+  confirmTxt:{fontSize:12,color:C.text,lineHeight:18},
   waitDeadline:{fontSize:12,color:C.teal,fontWeight:'700',marginTop:4},
   disputeBox:{backgroundColor:C.redLt,borderRadius:10,padding:10,borderWidth:1,borderColor:'#FECACA'},
   disputeTxt:{fontSize:12,color:C.red,fontWeight:'600'},
