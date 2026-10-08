@@ -227,7 +227,7 @@ export default function Roadside() {
                   We're signing up providers across Malta. Tell us what you need
                   and we'll message you when someone can do it.
                 </Text>
-                <TouchableOpacity style={s.noneBtn} onPress={()=>router.push('/request')}>
+                <TouchableOpacity style={s.noneBtn} onPress={()=>router.push('/request?cat=vehicle')}>
                   <Text style={s.noneBtnTxt}>Tell us what you need</Text>
                 </TouchableOpacity>
               </View>
@@ -624,3 +624,4 @@ const s = StyleSheet.create({
   nextBtnDis:{backgroundColor:C.muted},
   nextBtnTxt:{color:C.white,fontSize:15,fontWeight:'700'},
 });
+

@@ -5,7 +5,7 @@ import { C, S } from '../constants/theme';
 
 const UPDATED = '30 September 2026';
 const COMPANY = 'Pojico Ltd';
-const EMAIL   = 'privacy@po-ji.com';
+const EMAIL   = 'supportpoji@gmail.com';
 const SITE    = 'po-ji.com';
 
 type Section = { h: string; p?: string[]; bullets?: string[]; table?: [string,string][] };
@@ -322,3 +322,4 @@ const s = StyleSheet.create({
   contactTitle:{fontSize:15,fontWeight:'800',color:C.primary,marginBottom:4},
   contactTxt:{fontSize:13,color:C.text},
 });
+

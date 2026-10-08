@@ -84,7 +84,7 @@ export default function Services() {
             We're signing providers up across Malta. Tell us what you need and
             we'll message you when someone can do it.
           </Text>
-          <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push('/request')}>
+          <TouchableOpacity style={s.emptyBtn} onPress={()=>router.push('/request?cat=' + (category || ''))}>
             <Text style={s.emptyBtnTxt}>Tell us what you need</Text>
           </TouchableOpacity>
         </View>
@@ -107,7 +107,7 @@ export default function Services() {
       })}
 
       {trades.length > 0 && (
-        <TouchableOpacity style={s.requestRow} onPress={()=>router.push('/request')}>
+        <TouchableOpacity style={s.requestRow} onPress={()=>router.push('/request?cat=' + (category || ''))}>
           <Text style={s.requestIcon}>💬</Text>
           <View style={{flex:1}}>
             <Text style={s.requestTitle}>Something else in {cat.name.toLowerCase()}?</Text>
@@ -174,3 +174,4 @@ const s = StyleSheet.create({
   emptyIcon:{fontSize:42},
   emptyTxt:{fontSize:13,color:C.muted,textAlign:'center',lineHeight:19},
 });
+

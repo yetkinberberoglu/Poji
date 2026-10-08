@@ -116,7 +116,7 @@ export default function Profile() {
         ]},
         {title:'Support', items:[
           {icon:'💬',label:'Help & FAQ',sub:'Common questions'},
-          {icon:'📧',label:'Contact Us',sub:'support@po-ji.com'},
+          {icon:'📧',label:'Contact Us',sub:'supportpoji@gmail.com'},
           {icon:'⭐',label:'Rate the App',sub:'Love Poji?'},
         ]},
       ].map(section=>(
@@ -201,3 +201,4 @@ const s = StyleSheet.create({
   signOutTxt:{color:C.red,fontWeight:'600',fontSize:15},
   version:{textAlign:'center',fontSize:12,color:C.muted,marginTop:12},
 });
+
