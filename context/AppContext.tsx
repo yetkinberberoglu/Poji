@@ -10,8 +10,8 @@ export const MOCK_CLEANERS: any[] = [];
 export const CLEANERS = MOCK_CLEANERS;
 
 export interface Booking {
-  id: string; cleanerId: string; clientId?: string; address: string;
-  date: string; time: string; hours: number; numCleaners: number;
+  id: string; providerId: string; clientId?: string; address: string;
+  date: string; time: string; hours: number; numWorkers: number;
   propertyType: string; serviceType: string;
   total: number; status: string; createdAt: string;
   pinCode?: string | null;
@@ -21,12 +21,12 @@ export interface Booking {
   clientConfirmedAt?: string | null;
   autoConfirmAt?: string | null;
   disputeReason?: string | null;
-  preferredCleanerId?: string | null;
+  preferredProviderId?: string | null;
   preferredUntil?: string | null;
   releasedToPool?: boolean;
   actualMinutes?: number | null;
   finalTotal?: number | null;
-  finalCleanerPayment?: number | null;
+  finalProviderPayment?: number | null;
   finalPlatformCommission?: number | null;
   finalVat?: number | null;
   estimatedTotal?: number | null;
@@ -104,8 +104,8 @@ interface Ctx {
   reportNoShow: (id: string) => Promise<string>;
   clientDispute: (id: string, reason: string) => Promise<void>;
   releaseToPool: (id: string) => Promise<void>;
-  reassignCleaner: (id: string, newCleanerId: string) => Promise<void>;
-  acceptJob: (id: string, myCleanerId: string) => Promise<boolean>;
+  reassignProvider: (id: string, newProviderId: string) => Promise<void>;
+  acceptJob: (id: string, myProviderId: string) => Promise<boolean>;
   proposeTime: (id: string, date: string, time: string, note: string, myId: string) => Promise<void>;
   sendQuote: (id: string, labour: number, parts: number, note: string, myId: string) => Promise<void>;
   respondToQuote: (id: string, accept: boolean) => Promise<void>;
@@ -243,7 +243,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       query = query.eq('hidden_for_client', false);
     } else if (role === 'cleaner') {
       query = query.or(
-        `cleaner_id.eq.${user.id},preferred_cleaner_id.eq.${user.id},released_to_pool.eq.true`
+        `provider_id.eq.${user.id},preferred_provider_id.eq.${user.id},released_to_pool.eq.true`
       ).eq('hidden_for_provider', false);
     }
 
@@ -253,13 +253,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (data) {
       setBookings(data.map(b => ({
         id: b.id,
-        cleanerId: b.cleaner_id,
+        providerId: b.provider_id,
         clientId: b.client_id,
         address: b.address,
         date: b.date,
         time: b.start_time,
         hours: b.hours,
-        numCleaners: b.num_cleaners,
+        numWorkers: b.num_workers,
         propertyType: b.property_type,
         serviceType: b.service_type,
         total: b.total_price,
@@ -272,12 +272,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         clientConfirmedAt: b.client_confirmed_at,
         autoConfirmAt: b.auto_confirm_at,
         disputeReason: b.dispute_reason,
-        preferredCleanerId: b.preferred_cleaner_id,
+        preferredProviderId: b.preferred_provider_id,
         preferredUntil: b.preferred_until,
         releasedToPool: b.released_to_pool,
         actualMinutes: b.actual_minutes,
         finalTotal: b.final_total,
-        finalCleanerPayment: b.final_cleaner_payment,
+        finalProviderPayment: b.final_provider_payment,
         finalPlatformCommission: b.final_platform_commission,
         finalVat: b.final_vat,
         estimatedTotal: b.estimated_total ?? b.total_price,
@@ -405,12 +405,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const exVat = b.total / 1.029 / 1.18;
     const { data, error } = await supabase.from('bookings').insert({
       client_id: user.id,
-      cleaner_id: b.cleanerId || null,
+      provider_id: b.providerId || null,
       address: b.address,
       date: b.date,
       start_time: b.time,
       hours: b.hours,
-      num_cleaners: b.numCleaners,
+      num_workers: b.numWorkers,
       property_type: b.propertyType,
       service_type: b.serviceType,
       price_ex_vat: +exVat.toFixed(2),
@@ -418,7 +418,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       stripe_fee: +(b.total - b.total / 1.029).toFixed(2),
       total_price: b.total,
       estimated_total: b.total,
-      cleaner_payment: +(exVat * 0.80).toFixed(2),
+      provider_payment: +(exVat * 0.80).toFixed(2),
       platform_commission: +(exVat * 0.20).toFixed(2),
       status: 'pending',
       service_multiplier: meta?.multiplier ?? 1,
@@ -446,7 +446,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       discount: meta?.discount ?? 0,
       labour_total: meta?.labourTotal ?? null,
       parts_total: meta?.partsTotal ?? 0,
-      preferred_cleaner_id: b.cleanerId || null,
+      preferred_provider_id: b.providerId || null,
       preferred_until: meta?.releasedToPool ? null : new Date(Date.now() + 5*60*1000).toISOString(),
       released_to_pool: meta?.releasedToPool ?? false,
     }).select().single();
@@ -487,7 +487,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }, data.id)));
       } else
       // Tell the preferred cleaner they have a 5-minute priority window
-      notify(b.cleanerId, 'new_job_offer', {
+      notify(b.providerId, 'new_job_offer', {
         address: b.address,
         date: b.date,
         time: b.time,
@@ -499,12 +499,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }, data.id);
 
       setBookings(prev => [{
-        id: data.id, cleanerId: data.cleaner_id, clientId: data.client_id,
+        id: data.id, providerId: data.provider_id, clientId: data.client_id,
         address: data.address, date: data.date, time: data.start_time,
-        hours: data.hours, numCleaners: data.num_cleaners,
+        hours: data.hours, numWorkers: data.num_workers,
         propertyType: data.property_type, serviceType: data.service_type,
         total: data.total_price, status: data.status, createdAt: data.created_at,
-        preferredCleanerId: data.preferred_cleaner_id,
+        preferredProviderId: data.preferred_provider_id,
         preferredUntil: data.preferred_until,
         releasedToPool: data.released_to_pool,
       }, ...prev]);
@@ -533,7 +533,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const bk = bookings.find(x => x.id === id);
     if (bk) {
       const pool = await matchingProviders({
-        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.cleanerId,
+        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.providerId,
       });
       pool.forEach(c => notify(c.id, 'job_in_pool', {
         address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
@@ -542,31 +542,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const reassignCleaner = async (id: string, newCleanerId: string) => {
+  const reassignProvider = async (id: string, newProviderId: string) => {
     const until = new Date(Date.now() + 5*60*1000).toISOString();
     setBookings(prev => prev.map(b => b.id === id
-      ? { ...b, cleanerId:newCleanerId, preferredCleanerId:newCleanerId,
+      ? { ...b, providerId:newProviderId, preferredProviderId:newProviderId,
           preferredUntil:until, releasedToPool:false, status:'pending' } : b));
     const { error } = await supabase.from('bookings').update({
-      cleaner_id: newCleanerId, preferred_cleaner_id: newCleanerId,
+      provider_id: newProviderId, preferred_provider_id: newProviderId,
       preferred_until: until, released_to_pool: false, status: 'pending',
     }).eq('id', id);
-    if (error) console.log('reassignCleaner error:', error.message);
+    if (error) console.log('reassignProvider error:', error.message);
 
     const bk = bookings.find(x => x.id === id);
     if (bk) {
-      notify(newCleanerId, 'new_job_offer', {
+      notify(newProviderId, 'new_job_offer', {
         address: bk.address, date: bk.date, time: bk.time,
-        hours: bk.hours, numCleaners: bk.numCleaners, serviceType: bk.serviceType,
+        hours: bk.hours, numWorkers: bk.numWorkers, serviceType: bk.serviceType,
         earnings: (bk.total / 1.029 / 1.18 * 0.80),
       }, id);
     }
   };
 
-  const acceptJob = async (id: string, myCleanerId: string): Promise<boolean> => {
+  const acceptJob = async (id: string, myProviderId: string): Promise<boolean> => {
     // a suspended account cannot pick up work
     const { data: me } = await supabase.from('profiles')
-      .select('suspended_until').eq('id', myCleanerId).maybeSingle();
+      .select('suspended_until').eq('id', myProviderId).maybeSingle();
     if (me?.suspended_until && new Date(me.suspended_until) >= new Date()) {
       console.log('acceptJob: account suspended until', me.suspended_until);
       return false;
@@ -576,9 +576,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .from('bookings').select('status').eq('id', id).maybeSingle();
     if (!current || !['pending','pending_pool'].includes(current.status)) return false;
 
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, status:'accepted', cleanerId:myCleanerId } : b));
+    setBookings(prev => prev.map(b => b.id === id ? { ...b, status:'accepted', providerId:myProviderId } : b));
     const { error } = await supabase.from('bookings')
-      .update({ status:'accepted', cleaner_id: myCleanerId })
+      .update({ status:'accepted', provider_id: myProviderId })
       .eq('id', id).in('status', ['pending','pending_pool']);
     if (error) { console.log('acceptJob error:', error.message); return false; }
 
@@ -610,7 +610,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const s: any = data || {};
 
     setBookings(prev => prev.map(b => b.id === id
-      ? { ...b, status:'quoted', cleanerId: myId,
+      ? { ...b, status:'quoted', providerId: myId,
           quoteAmount: labour, quoteParts: parts, quoteNote: note,
           total: s.total ?? b.total }
       : b));
@@ -635,8 +635,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .update({ status: 'accepted' }).eq('id', id);
       if (error) console.log('respondToQuote error:', error.message);
 
-      if (bk.cleanerId) {
-        notify(bk.cleanerId, 'quote_accepted', {
+      if (bk.providerId) {
+        notify(bk.providerId, 'quote_accepted', {
           amount: Number(bk.total).toFixed(2),
           address: bk.address, date: bk.date, time: bk.time,
         }, id);
@@ -647,8 +647,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .update({ status: 'cancelled' }).eq('id', id);
       if (error) console.log('respondToQuote error:', error.message);
 
-      if (bk.cleanerId) {
-        notify(bk.cleanerId, 'quote_declined', { address: bk.address }, id);
+      if (bk.providerId) {
+        notify(bk.providerId, 'quote_declined', { address: bk.address }, id);
       }
     }
   };
@@ -660,13 +660,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const bk = bookings.find(x => x.id === id);
 
     setBookings(prev => prev.map(b => b.id === id
-      ? { ...b, status:'reschedule_proposed', cleanerId: myId,
+      ? { ...b, status:'reschedule_proposed', providerId: myId,
           proposedDate: date, proposedTime: time, proposedNote: note, proposedBy: myId }
       : b));
 
     const { error } = await supabase.from('bookings').update({
       status: 'reschedule_proposed',
-      cleaner_id: myId,
+      provider_id: myId,
       proposed_date: date,
       proposed_time: time,
       proposed_note: note || null,
@@ -708,36 +708,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }).eq('id', id);
       if (error) console.log('respondToProposal error:', error.message);
 
-      if (bk.cleanerId) {
-        notify(bk.cleanerId, 'time_accepted', {
+      if (bk.providerId) {
+        notify(bk.providerId, 'time_accepted', {
           date: bk.proposedDate, time: bk.proposedTime, address: bk.address,
         }, id);
       }
     } else {
       // back to the pool so someone else can take the original slot
       setBookings(prev => prev.map(b => b.id === id
-        ? { ...b, status:'pending_pool', releasedToPool:true, cleanerId:'',
+        ? { ...b, status:'pending_pool', releasedToPool:true, providerId:'',
             proposedDate: null, proposedTime: null, proposedNote: null }
         : b));
 
       const { error } = await supabase.from('bookings').update({
         status: 'pending_pool',
         released_to_pool: true,
-        cleaner_id: null,
+        provider_id: null,
         proposed_date: null, proposed_time: null,
         proposed_note: null, proposed_by: null, proposed_at: null,
       }).eq('id', id);
       if (error) console.log('respondToProposal error:', error.message);
 
-      if (bk.cleanerId) {
-        notify(bk.cleanerId, 'time_declined', {
+      if (bk.providerId) {
+        notify(bk.providerId, 'time_declined', {
           address: bk.address, date: bk.date, time: bk.time,
         }, id);
       }
 
       // tell everyone else it's going spare
       const pool = await matchingProviders({
-        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.cleanerId,
+        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.providerId,
       });
       pool.forEach(c => notify(c.id, 'job_in_pool', {
         address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
@@ -804,7 +804,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           completionPhotos: photos || null,
           actualMinutes: s.billed_minutes ?? null,
           finalTotal: s.total ?? null,
-          finalCleanerPayment: s.provider_gets ?? null,
+          finalProviderPayment: s.provider_gets ?? null,
           finalPlatformCommission:
             (Number(s.labour_commission) || 0) + (Number(s.parts_commission) || 0),
           finalVat: s.vat ?? null,
@@ -839,8 +839,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBookings(prev => prev.map(b => b.id === id
       ? { ...b, status: 'cancelled', noShow: true } : b));
 
-    if (bk?.cleanerId) {
-      notify(bk.cleanerId, 'no_show_recorded', {
+    if (bk?.providerId) {
+      notify(bk.providerId, 'no_show_recorded', {
         address: bk.address, date: bk.date, time: bk.time,
       }, id);
     }
@@ -864,9 +864,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       : b));
 
-    if (bk?.cleanerId) {
-      notify(bk.cleanerId, 'job_completed', {
-        earnings: s.provider_gets ?? bk.finalCleanerPayment ?? 0,
+    if (bk?.providerId) {
+      notify(bk.providerId, 'job_completed', {
+        earnings: s.provider_gets ?? bk.finalProviderPayment ?? 0,
       }, id);
     }
   };
@@ -894,7 +894,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       bookings, cleaners, providers: cleaners, availableTrades, providersFor,
       addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
-      releaseToPool, reassignCleaner, acceptJob, proposeTime, respondToProposal,
+      releaseToPool, reassignProvider, acceptJob, proposeTime, respondToProposal,
       sendQuote, respondToQuote, hideBooking, reportNoShow,
       loadBookings, getCleanerById,
       userRole, userName, userId, myCategories,

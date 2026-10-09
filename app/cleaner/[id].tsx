@@ -112,7 +112,7 @@ export default function CleanerProfile() {
         </View>
         <TouchableOpacity
           style={[s.bookBtn, !c.available&&s.bookBtnDis]}
-          onPress={()=>c.available&&router.push(`/booking?cleanerId=${c.id}&cleanerName=${encodeURIComponent(c.name)}${trade?`&trade=${trade}`:''}`)}
+          onPress={()=>c.available&&router.push(`/booking?providerId=${c.id}&cleanerName=${encodeURIComponent(c.name)}${trade?`&trade=${trade}`:''}`)}
         >
           <Text style={s.bookBtnTxt}>
             {c.available?`Book ${c.name.split(' ')[0]}  →`:'Currently Unavailable'}

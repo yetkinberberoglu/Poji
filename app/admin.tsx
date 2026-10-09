@@ -108,7 +108,7 @@ export default function Admin() {
 
     const gmv        = completed.reduce((s,b)=>s+Number(b.price_ex_vat||0),0);
     const commission = completed.reduce((s,b)=>s+Number(b.platform_commission||0),0);
-    const payouts    = completed.reduce((s,b)=>s+Number(b.cleaner_payment||0),0);
+    const payouts    = completed.reduce((s,b)=>s+Number(b.provider_payment||0),0);
 
     const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
     const lastMonth = new Date(thisMonth); lastMonth.setMonth(lastMonth.getMonth()-1);
@@ -165,10 +165,10 @@ export default function Admin() {
   const cleaners = useMemo(()=>{
     return profiles.filter(p=>p.role==='cleaner').map(p=>{
       const app  = apps.find(a=>a.id===p.id);
-      const mine = bookings.filter(b=>b.cleaner_id===p.id);
+      const mine = bookings.filter(b=>b.provider_id===p.id);
       const done = mine.filter(b=>b.status==='completed');
       const rej  = mine.filter(b=>b.status==='cancelled');
-      const earned = done.reduce((s,b)=>s+Number(b.cleaner_payment||0),0);
+      const earned = done.reduce((s,b)=>s+Number(b.provider_payment||0),0);
       const myRevs = reviews.filter(r=>r.cleaner_id===p.id);
       const rating = myRevs.length ? myRevs.reduce((s,r)=>s+Number(r.rating||0),0)/myRevs.length : 0;
       return {
@@ -692,7 +692,7 @@ export default function Admin() {
                   <View style={{flex:1}}>
                     <Text style={st.cardTitle}>{b.address}</Text>
                     <Text style={st.cardSub}>
-                      {prettyDate(b.date)} · {b.start_time} · {b.hours}h × {b.num_cleaners}
+                      {prettyDate(b.date)} · {b.start_time} · {b.hours}h × {b.num_workers}
                     </Text>
                   </View>
                   <View style={[st.pill,{backgroundColor:meta.bg}]}>
@@ -701,7 +701,7 @@ export default function Admin() {
                 </View>
                 <View style={st.rowBetween}>
                   <Text style={st.cardSub}>
-                    {nameOf(b.client_id)} → {nameOf(b.cleaner_id)}
+                    {nameOf(b.client_id)} → {nameOf(b.provider_id)}
                   </Text>
                   <View style={{alignItems:'flex-end'}}>
                     <Text style={st.amount}>{money(b.total_price)}</Text>
@@ -943,7 +943,7 @@ export default function Admin() {
 
               <Detail title="Timeline" rows={[
                 ['Client',   nameOf(b.client_id)],
-                ['Cleaner',  nameOf(b.cleaner_id)],
+                ['Cleaner',  nameOf(b.provider_id)],
                 ['Started',  b.started_at  ? new Date(b.started_at).toLocaleString('en-GB')  : '—'],
                 ['Finished', b.finished_at ? new Date(b.finished_at).toLocaleString('en-GB') : '—'],
                 ['PIN used', b.started_at ? 'Yes — cleaner was on site' : 'No'],

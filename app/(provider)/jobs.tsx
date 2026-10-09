@@ -292,7 +292,7 @@ export default function ProviderScreen() {
   /** Jobs in the trades this provider actually signed up for */
   const inMyTrade = (b: any) => {
     // anything already assigned to me always shows
-    if (b.cleanerId === userId) return true;
+    if (b.providerId === userId) return true;
     // every booking records which trade it belongs to
     if (b.tradeId) return myCategories.includes(b.tradeId);
     // older bookings with no trade recorded — fall back to cleaning
@@ -302,11 +302,11 @@ export default function ProviderScreen() {
   const active = bookings
     .filter(b => !['cancelled','completed','disputed'].includes(b.status))
     .filter(inMyTrade)
-    .filter(b => !passed.has(b.id) || b.cleanerId === userId)
+    .filter(b => !passed.has(b.id) || b.providerId === userId)
     .sort((a,b) => (b.isUrgent ? 1 : 0) - (a.isUrgent ? 1 : 0));
   const done   = bookings.filter(b => ['cancelled','completed','disputed'].includes(b.status));
   const earned = done.filter(b => b.status==='completed')
-    .reduce((s,b) => s + Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)), 0);
+    .reduce((s,b) => s + Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)), 0);
 
   return (
     <ScrollView style={s0.wrap} showsVerticalScrollIndicator={false}
@@ -559,10 +559,10 @@ export default function ProviderScreen() {
                 </View>
               )}
 
-              {b.numCleaners > 1 && (
+              {b.numWorkers > 1 && (
                 <View style={s0.teamBanner}>
                   <Text style={s0.teamBannerTxt}>
-                    👥  Bring {b.numCleaners} cleaners — the client booked a team
+                    👥  Bring {b.numWorkers} cleaners — the client booked a team
                   </Text>
                 </View>
               )}
@@ -775,7 +775,7 @@ export default function ProviderScreen() {
                       const rate = (Number(b.hourlyRate)||15) * (Number(b.serviceMultiplier)||1)
                                  + (b.suppliesBy === 'cleaner' ? 2 : 0);
                       const billed = Math.ceil(mins/15)*15;
-                      const earning = (billed/60) * rate * (b.numCleaners||1) * 0.80;
+                      const earning = (billed/60) * rate * (b.numWorkers||1) * 0.80;
                       return (
                         <View style={s0.timerBox}>
                           <View style={s0.timerRow}>
@@ -900,7 +900,7 @@ export default function ProviderScreen() {
                       )}
                       <View style={s0.settleRow}>
                         <Text style={s0.settleLbl}>Your payment</Text>
-                        <Text style={s0.settleBig}>€{Number(b.finalCleanerPayment||0).toFixed(2)}</Text>
+                        <Text style={s0.settleBig}>€{Number(b.finalProviderPayment||0).toFixed(2)}</Text>
                       </View>
                     </View>
                   )}
@@ -944,7 +944,7 @@ export default function ProviderScreen() {
                     <Text style={s0.earningsKey}>{prettyDate(b.date)} · {b.hours}h</Text>
                     <Text style={s0.earningsAmt}>
                       {b.status==='completed'
-                        ? `€${Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)).toFixed(2)}`
+                        ? `€${Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)).toFixed(2)}`
                         : st.label}
                     </Text>
                     <TouchableOpacity onPress={()=>hideBooking(b.id, 'provider')}>

@@ -129,12 +129,12 @@ export default function Roadside() {
         time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
       };
       await addBooking({
-        cleanerId: '',
+        providerId: '',
         address: locLabel || manualAddr || 'Roadside',
         date: when.date,
         time: when.time,
         hours: (Number(type.typical_minutes) || 30) / 60,
-        numCleaners: 1,
+        numWorkers: 1,
         propertyType: 'vehicle',
         serviceType: type.id,
         total: isQuoteJob ? 0 : (p?.clientPays || 0),

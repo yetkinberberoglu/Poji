@@ -56,10 +56,10 @@ export default function Earnings() {
     const pending = bookings.filter(b => b.status === 'awaiting_confirmation');
 
     const earned = paid.reduce((s,b) =>
-      s + Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)), 0);
+      s + Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)), 0);
 
     const waiting = pending.reduce((s,b) =>
-      s + Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80)), 0);
+      s + Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)), 0);
 
     const minutes = paid.reduce((s,b) => s + Number(b.actualMinutes ?? (b.hours*60)), 0);
     const hourly  = minutes > 0 ? earned / (minutes/60) : 0;
@@ -159,7 +159,7 @@ export default function Earnings() {
           </Text>
         </View>
       ) : history.map(b=>{
-        const pay = Number(b.finalCleanerPayment ?? (b.total/1.029/1.18*0.80));
+        const pay = Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80));
         const waiting = b.status === 'awaiting_confirmation';
         return (
           <View key={b.id} style={s.row}>

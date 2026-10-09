@@ -186,10 +186,10 @@ export function estimateHours(opts: {
   sizeFactor: number;
   extraMinutes: number;
   minHours: number;
-  numCleaners: number;
+  numWorkers: number;
 }) {
   const totalMinutes = opts.baseMinutes * opts.sizeFactor + opts.extraMinutes;
-  const perCleaner   = totalMinutes / Math.max(1, opts.numCleaners);
+  const perCleaner   = totalMinutes / Math.max(1, opts.numWorkers);
   const rawHours     = perCleaner / 60;
   const rounded      = Math.ceil(rawHours * 2) / 2;      // nearest 0.5h
   return {
@@ -206,7 +206,7 @@ export function estimateHours(opts: {
 export function quote(opts: {
   baseRate: number;
   hours: number;
-  numCleaners: number;
+  numWorkers: number;
   multiplier: number;
   suppliesByCleaner: boolean;
 }) {
@@ -217,7 +217,7 @@ export function quote(opts: {
   const effectiveRate = +(opts.baseRate * opts.multiplier
     + (opts.suppliesByCleaner ? SUPPLY_SURCHARGE : 0)).toFixed(2);
 
-  const exVat   = +(effectiveRate * opts.hours * opts.numCleaners).toFixed(2);
+  const exVat   = +(effectiveRate * opts.hours * opts.numWorkers).toFixed(2);
   const vat     = +(exVat * VAT_RATE).toFixed(2);
   const service = +(exVat + vat).toFixed(2);
   const stripe  = +(service * 0.029 + 0.30).toFixed(2);
@@ -265,7 +265,7 @@ export function finalQuote(opts: {
   baseRate: number;
   multiplier: number;
   suppliesByCleaner: boolean;
-  numCleaners: number;
+  numWorkers: number;
 }) {
   const SUPPLY_SURCHARGE = 2;
   const VAT_RATE   = VAT_ON_TOP;
@@ -279,7 +279,7 @@ export function finalQuote(opts: {
   const effectiveRate = +(opts.baseRate * opts.multiplier
     + (opts.suppliesByCleaner ? SUPPLY_SURCHARGE : 0)).toFixed(2);
 
-  const exVat   = +(effectiveRate * hours * opts.numCleaners).toFixed(2);
+  const exVat   = +(effectiveRate * hours * opts.numWorkers).toFixed(2);
   const vat     = +(exVat * VAT_RATE).toFixed(2);
   const service = +(exVat + vat).toFixed(2);
   const stripe  = +(service * 0.029 + 0.30).toFixed(2);

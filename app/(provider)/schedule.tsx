@@ -99,7 +99,7 @@ export default function Schedule() {
                       : b.status === 'arrived' ? 'On site'
                       : b.status === 'en_route' ? 'On the way'
                       : 'Accepted'}
-                    {b.numCleaners > 1 ? ` · ${b.numCleaners} people` : ''}
+                    {b.numWorkers > 1 ? ` · ${b.numWorkers} people` : ''}
                   </Text>
                   {late && <Text style={s.lateTxt}>This started already</Text>}
                 </View>

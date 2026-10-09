@@ -69,7 +69,7 @@ const fmtM = (m:number) => m >= 60
 
 export default function BookingScreen() {
   const { addBooking, cleaners } = useApp();
-  const params = useLocalSearchParams<{cleanerId?: string; cleanerName?: string; trade?: string}>();
+  const params = useLocalSearchParams<{providerId?: string; cleanerName?: string; trade?: string}>();
 
   const [step, setStep]    = useState(0);
   const [loading, setLoad] = useState(false);
@@ -99,8 +99,8 @@ export default function BookingScreen() {
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
   const [num, setNum]   = useState(1);
-  const [pickedCleaner, setPicked] = useState<string|null>(params.cleanerId || null);
-  const [lockedToCleaner, setLocked] = useState<boolean>(!!params.cleanerId);
+  const [pickedCleaner, setPicked] = useState<string|null>(params.providerId || null);
+  const [lockedToCleaner, setLocked] = useState<boolean>(!!params.providerId);
   const [days] = useState(buildDays);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
@@ -200,22 +200,22 @@ export default function BookingScreen() {
     .filter(offersService)
     .filter(c => flat || isQuote || teamSizeOf(c) >= num);
   const capable = lockedToCleaner
-    ? allCapable.filter(c => c.id === params.cleanerId)
+    ? allCapable.filter(c => c.id === params.providerId)
     : allCapable;
 
-  const lockedCleaner  = cleaners.find(c => c.id === params.cleanerId) || null;
+  const lockedCleaner  = cleaners.find(c => c.id === params.providerId) || null;
   const lockedCapacity = lockedCleaner ? teamSizeOf(lockedCleaner) : 0;
   const cleaner = cleaners.find(c => c.id === pickedCleaner) || null;
 
   const cleanerMin = (cleaner as any)?.minHours ?? 2;
   const minHours   = Math.max(svcMinHours, cleanerMin);
-  const est = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours, numCleaners: num });
+  const est = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours, numWorkers: num });
   const hours = manualHours ?? est.hours;
 
   const baseRate = cleaner?.rate ?? 0;
 
   // Two completely different sums
-  const hourlyQuote = quote({ baseRate, hours, numCleaners: num, multiplier, suppliesByCleaner });
+  const hourlyQuote = quote({ baseRate, hours, numWorkers: num, multiplier, suppliesByCleaner });
   const effFor = (providerId?: string|null) =>
     svcType ? effectiveService(svcType, providerId ? prices[providerId] : null) : null;
 
@@ -303,14 +303,14 @@ export default function BookingScreen() {
       return { total: q.clientPays, label: fmtM(eff?.minutes || 60) };
     }
     const cMin = Math.max(svcMinHours, c.minHours ?? 2);
-    const e = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours: cMin, numCleaners: num });
-    const q = quote({ baseRate: c.rate, hours: e.hours, numCleaners: num, multiplier, suppliesByCleaner });
+    const e = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours: cMin, numWorkers: num });
+    const q = quote({ baseRate: c.rate, hours: e.hours, numWorkers: num, multiplier, suppliesByCleaner });
     return { total: q.clientPays, label: fmtH(e.hours) };
   };
 
   useEffect(() => {
     (async () => {
-      const chosen = cleaners.find(c => c.id === (params.cleanerId || ''));
+      const chosen = cleaners.find(c => c.id === (params.providerId || ''));
       const theirTrades = (chosen as any)?.categories || [];
       const tradeFilter = params.trade
         ? { trade: params.trade }
@@ -332,7 +332,7 @@ export default function BookingScreen() {
 
       setCatLoading(false);
     })();
-  }, [params.cleanerId, params.trade, cleaners.length]);
+  }, [params.providerId, params.trade, cleaners.length]);
 
   useEffect(() => {
     (async () => {
@@ -381,12 +381,12 @@ export default function BookingScreen() {
     setFailed('');
     try {
       await addBooking({
-        cleanerId: cleaner.id,
+        providerId: cleaner.id,
         address: isTransport ? `${fromLoc} → ${toLoc}` : (address || '12 Tower Road, Sliema'),
         date: date || iso(new Date()),
         time: time || '10:00',
         hours: isFixed ? (myEff?.minutes || 60) / 60 : hours,
-        numCleaners: (isFixed || isQuote) ? 1 : num,
+        numWorkers: (isFixed || isQuote) ? 1 : num,
         propertyType: (isFixed || isQuote) ? 'n/a' : size,
         serviceType: svc,
         total,

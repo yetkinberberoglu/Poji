@@ -47,12 +47,12 @@ export default function Payout() {
 
       // what's waiting for them
       const { data: jobs } = await supabase.from('bookings')
-        .select('final_cleaner_payment, cleaner_payment, total_price, status')
-        .eq('cleaner_id', user.id)
+        .select('final_provider_payment, provider_payment, total_price, status')
+        .eq('provider_id', user.id)
         .in('status', ['completed','awaiting_confirmation']);
 
       const total = (jobs || []).reduce((sum:number, b:any) =>
-        sum + Number(b.final_cleaner_payment ?? b.cleaner_payment ?? 0), 0);
+        sum + Number(b.final_provider_payment ?? b.provider_payment ?? 0), 0);
       setOwed(total);
 
       setLoad(false);

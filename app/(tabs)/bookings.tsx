@@ -46,7 +46,7 @@ const DISPUTE_REASONS = [
 ];
 
 export default function Bookings() {
-  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignCleaner, respondToProposal, respondToQuote, hideBooking, reportNoShow, loadBookings } = useApp();
+  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignProvider, respondToProposal, respondToQuote, hideBooking, reportNoShow, loadBookings } = useApp();
   const [refreshing, setRefreshing]   = useState(false);
   const [busy, setBusy]               = useState<string|null>(null);
   const [disputeFor, setDisputeFor]   = useState<string|null>(null);
@@ -157,8 +157,8 @@ export default function Bookings() {
   const doProposal = async (id: string, accept: boolean) => {
     setBusy(id); await respondToProposal(id, accept); setBusy(null);
   };
-  const doReassign = async (id: string, cleanerId: string) => {
-    setBusy(id); await reassignCleaner(id, cleanerId); setBusy(null); setPickFor(null);
+  const doReassign = async (id: string, providerId: string) => {
+    setBusy(id); await reassignProvider(id, providerId); setBusy(null); setPickFor(null);
   };
 
   const submitDispute = async (id: string) => {
@@ -226,7 +226,7 @@ export default function Bookings() {
 
       {bookings.map(b=>{
         const s = STATUS[b.status]||STATUS.pending;
-        const cleaner = cleaners.find(c=>c.id===b.cleanerId);
+        const cleaner = cleaners.find(c=>c.id===b.providerId);
         const isBusy = busy===b.id;
 
         return (
@@ -250,7 +250,7 @@ export default function Bookings() {
                   </Text>
                   <Text style={st.cleanerSub}>
                     {prettyDate(b.date)} at {b.time}
-                    {b.pricingModel === 'hourly' ? ` · ${b.hours}h × ${b.numCleaners}` : ''}
+                    {b.pricingModel === 'hourly' ? ` · ${b.hours}h × ${b.numWorkers}` : ''}
                   </Text>
                 </View>
                 <View style={{alignItems:'flex-end'}}>
@@ -279,7 +279,7 @@ export default function Bookings() {
                 // Who else could actually take this? Only people in the same
                 // trade, free to work, and not the one who went quiet.
                 const alternatives = cleaners.filter(c =>
-                  c.id !== b.cleanerId &&
+                  c.id !== b.providerId &&
                   c.available &&
                   (!b.tradeId || ((c as any).categories || []).includes(b.tradeId))
                 );
@@ -445,7 +445,7 @@ export default function Bookings() {
                 const rate = (Number(b.hourlyRate)||15) * (Number(b.serviceMultiplier)||1)
                            + (b.suppliesBy === 'cleaner' ? 2 : 0);
                 const billed  = Math.ceil(mins/15)*15;
-                const running = (billed/60) * rate * (b.numCleaners||1) * 1.18 * 1.029 + 0.30;
+                const running = (billed/60) * rate * (b.numWorkers||1) * 1.18 * 1.029 + 0.30;
                 return (
                   <View style={st.runBox}>
                     <Text style={st.runTitle}>🧹  Cleaning in progress</Text>
@@ -727,7 +727,7 @@ export default function Bookings() {
                     </View>
                   ) : (
                     <TouchableOpacity style={st.reviewBtn}
-                      onPress={()=>router.push(`/review?bookingId=${b.id}&cleanerId=${b.cleanerId}&cleanerName=${encodeURIComponent(cleaner?.name||'your provider')}`)}>
+                      onPress={()=>router.push(`/review?bookingId=${b.id}&providerId=${b.providerId}&cleanerName=${encodeURIComponent(cleaner?.name||'your provider')}`)}>
                       <Text style={st.reviewTxt}>⭐  Leave a Review</Text>
                     </TouchableOpacity>
                   )}

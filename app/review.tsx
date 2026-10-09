@@ -6,7 +6,7 @@ import { useApp } from '../context/AppContext';
 import { supabase } from '../lib/supabase';
 
 export default function ReviewScreen() {
-  const params = useLocalSearchParams<{bookingId?: string; cleanerId?: string; cleanerName?: string}>();
+  const params = useLocalSearchParams<{bookingId?: string; providerId?: string; cleanerName?: string}>();
   const { loadBookings } = useApp();
   const [rating, setRating]   = useState(0);
   const [comment, setComment] = useState('');
@@ -24,7 +24,7 @@ export default function ReviewScreen() {
     if (!user) { setLoading(false); setError('Not logged in.'); return; }
     const { error: err } = await supabase.from('reviews').insert({
       booking_id: params.bookingId, reviewer_id: user.id,
-      cleaner_id: params.cleanerId, rating, comment: comment || null,
+      cleaner_id: params.providerId, rating, comment: comment || null,
     });
 
     if (err?.code === '23505') {

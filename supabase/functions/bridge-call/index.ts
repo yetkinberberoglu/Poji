@@ -51,13 +51,13 @@ Deno.serve(async (req) => {
 
     const { data: b } = await supabase
       .from('bookings')
-      .select('id, client_id, cleaner_id, date, start_time, status')
+      .select('id, client_id, provider_id, date, start_time, status')
       .eq('id', bookingId).maybeSingle();
 
     if (!b) return reply({ ok:false, error:'No such booking' }, 404);
 
     const isClient   = b.client_id === user.id;
-    const isProvider = b.cleaner_id === user.id;
+    const isProvider = b.provider_id === user.id;
     if (!isClient && !isProvider) {
       return reply({ ok:false, error:'That job is not yours' }, 403);
     }
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
     }
 
     const callerId = user.id;
-    const otherId  = isClient ? b.cleaner_id : b.client_id;
+    const otherId  = isClient ? b.provider_id : b.client_id;
     if (!otherId) return reply({ ok:false, error:'Nobody assigned yet' }, 400);
 
     const { data: people } = await supabase

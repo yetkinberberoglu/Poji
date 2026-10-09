@@ -113,7 +113,7 @@ export default function Providers() {
             </TouchableOpacity>
             <TouchableOpacity style={[s.bookBtn, !p.available&&s.bookBtnDis]}
               disabled={!p.available}
-              onPress={()=>router.push(`/booking?cleanerId=${p.id}&cleanerName=${encodeURIComponent(p.name)}&trade=${trade}`)}>
+              onPress={()=>router.push(`/booking?providerId=${p.id}&cleanerName=${encodeURIComponent(p.name)}&trade=${trade}`)}>
               <Text style={s.bookBtnTxt}>{p.available?'Book →':'Unavailable'}</Text>
             </TouchableOpacity>
           </View>

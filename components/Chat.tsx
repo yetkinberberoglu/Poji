@@ -174,7 +174,7 @@ export default function Chat({
     setPending(null);
 
     // tell the other side — they are almost certainly not looking at this screen
-    const otherId = role === 'client' ? booking.cleanerId : booking.clientId;
+    const otherId = role === 'client' ? booking.providerId : booking.clientId;
     if (otherId) {
       supabase.functions.invoke('send-notification', {
         body: {
