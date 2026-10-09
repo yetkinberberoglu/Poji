@@ -139,7 +139,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const colors = ['#4F46E5','#059669','#D97706','#0891B2','#7C3AED','#DC2626'];
     const list: Cleaner[] = (data || []).map((c: any, i: number) => {
-      const name = `${c.first_name || ''} ${c.last_name || ''}`.trim() || 'Cleaner';
+      const name = `${c.first_name || ''} ${c.last_name || ''}`.trim() || 'Provider';
       return {
         id: c.id,
         name,

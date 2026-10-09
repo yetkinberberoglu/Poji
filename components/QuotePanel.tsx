@@ -295,7 +295,7 @@ function ProviderSide({ bookingId, me, quotes, busy, run, rangeMin, rangeMax, tt
   const [labour, setLabour] = useState(mine ? String(mine.labour) : '');
   const [parts, setParts] = useState(mine && mine.parts > 0 ? String(mine.parts) : '');
   const [note, setNote] = useState(mine?.note ?? '');
-  const [pv, setPv] = useState<{ total: number; gets: number } | null>(null);
+  const [pv, setPv] = useState<any>(null);
   const timer = useRef<any>(null);
   const synced = useRef<string | null>(null);
 
@@ -309,21 +309,24 @@ function ProviderSide({ bookingId, me, quotes, busy, run, rangeMin, rangeMax, tt
     }
   }, [mine]);
 
-  // On izleme: rakamlari sunucuya sorar, boylece gosterilen tutar
-  // isin sonunda tahsil edilecek tutarin aynisi olur.
+  /**
+   * The server works out every line, including this job's own commission
+   * rate and whether it is urgent. Nothing is calculated on screen, so the
+   * figure here is the figure that settles — and the provider can see
+   * exactly where the difference goes before committing to it.
+   */
   useEffect(() => {
     const L = Number(labour || 0), P = Number(parts || 0);
     if (!L) { setPv(null); return; }
     clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
-      const [a, b] = await Promise.all([
-        supabase.rpc('poji_client_pays', { p_labour: L, p_parts: P }),
-        supabase.rpc('poji_provider_gets', { p_labour: L, p_parts: P }),
-      ]);
-      if (!a.error && !b.error) setPv({ total: Number(a.data), gets: Number(b.data) });
+      const { data, error } = await supabase.rpc('poji_quote_preview', {
+        p_booking: bookingId, p_labour: L, p_parts: P,
+      });
+      if (!error && data) setPv(data);
     }, 350);
     return () => clearTimeout(timer.current);
-  }, [labour, parts]);
+  }, [labour, parts, bookingId]);
 
   const chk = checkRange(pv?.total ?? 0, rangeMin, rangeMax);
   const blocked = !Number(labour || 0) || noteRequired(chk, note);
@@ -338,6 +341,14 @@ function ProviderSide({ bookingId, me, quotes, busy, run, rangeMin, rangeMax, tt
           <Text style={s.price}>{euro(mine.counter_total ?? 0)}</Text>
         </View>
         {mine.counter_note ? <Text style={s.note}>{mine.counter_note}</Text> : null}
+        <View style={s.preview}>
+          <View style={s.row}>
+            <Text style={[s.previewLabel, { flex: 1 }]}>If you accept, you receive</Text>
+            <Text style={[s.previewValue, { color: ACCENT }]}>
+              {euro(mine.provider_gets)}
+            </Text>
+          </View>
+        </View>
         <Text style={s.sub}>
           Accept and the job is yours straight away — no second confirmation needed.
           Keep your price and the client can still accept the original quote.
@@ -413,21 +424,69 @@ function ProviderSide({ bookingId, me, quotes, busy, run, rangeMin, rangeMax, tt
         style={s.input} keyboardType="decimal-pad" placeholder="0.00"
         placeholderTextColor={MUTED} value={parts} onChangeText={setParts} />
 
-      {pv ? (
-        <View style={s.preview}>
-          <View style={s.row}>
-            <Text style={[s.previewLabel, { flex: 1 }]}>Client pays</Text>
-            <Text style={s.previewValue}>{euro(pv.total)}</Text>
+      {pv ? (() => {
+        const n = (k: string) => Number(pv[k] || 0);
+        const base = +(n('labour') - n('urgent_fee')).toFixed(2);
+        const rate = Math.round(n('labour_commission_rate') * 100);
+        return (
+          <View style={s.preview}>
+            <View style={s.row}>
+              <Text style={[s.previewLabel, { flex: 1 }]}>Your labour</Text>
+              <Text style={s.breakVal}>{euro(base)}</Text>
+            </View>
+
+            {n('urgent_fee') > 0 && (
+              <View style={s.row}>
+                <Text style={[s.previewLabel, { flex: 1 }]}>Urgent callout (25%)</Text>
+                <Text style={s.breakVal}>+{euro(n('urgent_fee'))}</Text>
+              </View>
+            )}
+
+            {n('parts') > 0 && (
+              <View style={s.row}>
+                <Text style={[s.previewLabel, { flex: 1 }]}>Parts you supply</Text>
+                <Text style={s.breakVal}>{euro(n('parts'))}</Text>
+              </View>
+            )}
+
+            <View style={s.row}>
+              <Text style={[s.previewLabel, { flex: 1 }]}>Poji fee on labour ({rate}%)</Text>
+              <Text style={[s.breakVal, { color: DANGER }]}>
+                −{euro(n('labour_commission'))}
+              </Text>
+            </View>
+
+            {n('parts_commission') > 0 && (
+              <View style={s.row}>
+                <Text style={[s.previewLabel, { flex: 1 }]}>Poji fee on parts (5%)</Text>
+                <Text style={[s.breakVal, { color: DANGER }]}>
+                  −{euro(n('parts_commission'))}
+                </Text>
+              </View>
+            )}
+
+            <View style={[s.row, s.breakTotal]}>
+              <Text style={[s.previewLabel, { flex: 1, fontWeight: '700', color: INK }]}>
+                You receive
+              </Text>
+              <Text style={[s.previewValue, { color: ACCENT }]}>
+                {euro(n('provider_gets'))}
+              </Text>
+            </View>
+
+            <View style={[s.row, s.breakClient]}>
+              <Text style={[s.previewLabel, { flex: 1 }]}>Client pays</Text>
+              <Text style={s.previewValue}>{euro(n('total'))}</Text>
+            </View>
+
+            <Text style={s.previewFoot}>
+              Their total includes the {euro(n('stripe_fee'))} card fee
+              {n('vat') > 0 ? ` and ${euro(n('vat'))} VAT` : ''}. Your price is
+              yours to set; any VAT inside it is for you to account for.
+            </Text>
           </View>
-          <View style={s.row}>
-            <Text style={[s.previewLabel, { flex: 1 }]}>You receive</Text>
-            <Text style={[s.previewValue, { color: ACCENT }]}>{euro(pv.gets)}</Text>
-          </View>
-          <Text style={s.previewFoot}>
-            The difference is VAT, the card fee and Poji's commission — 20% on labour, 5% on parts.
-          </Text>
-        </View>
-      ) : null}
+        );
+      })() : null}
 
       {chk.out ? <Text style={s.warn}>{chk.message}</Text> : null}
 
@@ -508,6 +567,9 @@ const s = StyleSheet.create({
   preview: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, gap: 4, marginTop: 10 },
   previewLabel: { fontSize: 13, color: MUTED },
   previewValue: { fontSize: 16, fontWeight: '700', color: INK },
+  breakVal: { fontSize: 13, fontWeight: '600', color: INK },
+  breakTotal: { borderTopWidth: 1, borderTopColor: LINE, paddingTop: 8, marginTop: 4 },
+  breakClient: { borderTopWidth: 1, borderTopColor: LINE, paddingTop: 8 },
   previewFoot: { fontSize: 11, color: MUTED, marginTop: 4, lineHeight: 15 },
 
   btn: { borderRadius: 10, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center' },

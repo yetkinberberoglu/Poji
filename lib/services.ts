@@ -5,7 +5,14 @@ export type ServiceType = {
   multiplier: number; min_hours: number; base_minutes: number;
   icon: string; sort_order: number;
   category?: string;
-  pricing_model?: 'hourly' | 'fixed' | 'quote';
+  pricing_model?: 'hourly' | 'fixed' | 'quote' | 'unit';
+  /** Priced per unit of area or length — tiling, painting, screed, flooring */
+  unit_label?: string | null;
+  unit_price?: number | null;
+  min_charge?: number | null;
+  unit_binding?: boolean | null;
+  /** This service's own commission rate; null means the platform rate */
+  labour_commission?: number | null;
   fixed_price?: number | null;
   callout_fee?: number | null;
   typical_minutes?: number | null;
@@ -105,11 +112,17 @@ export type ProviderService = {
   questions?: ServiceQuestion[] | null;
   vehicles?: string[] | null;
   route_prices?: Record<string, number> | null;
+  unit_price?: number | null;
+  min_charge?: number | null;
+  /** null means "whatever the platform says"; true/false is the provider's own call */
+  unit_binding?: boolean | null;
 };
 
 export type ServiceExtra = {
   id: string; name: string; description: string;
   price: number; extra_minutes: number; icon: string; sort_order: number;
+  /** Extras belong to a trade. Oven cleaning has no business on a tiling job. */
+  trade_id?: string | null;
 };
 
 export type PropertySize = {
@@ -198,7 +211,7 @@ export function quote(opts: {
   suppliesByCleaner: boolean;
 }) {
   const SUPPLY_SURCHARGE = 2;
-  const VAT_RATE   = 0.18;
+  const VAT_RATE   = VAT_ON_TOP;
   const COMMISSION = 0.20;
 
   const effectiveRate = +(opts.baseRate * opts.multiplier
@@ -255,7 +268,7 @@ export function finalQuote(opts: {
   numCleaners: number;
 }) {
   const SUPPLY_SURCHARGE = 2;
-  const VAT_RATE   = 0.18;
+  const VAT_RATE   = VAT_ON_TOP;
   const COMMISSION = 0.20;
 
   const ms      = new Date(opts.finishedAt).getTime() - new Date(opts.startedAt).getTime();
@@ -294,6 +307,15 @@ export const fmtDuration = (mins: number) => {
 };
 
 
+/**
+ * Nothing is added for VAT. A provider's price already contains whatever
+ * VAT they owe, and they account for it themselves — Poji is the
+ * intermediary, not the seller. This mirrors poji_rates() in the database;
+ * if one ever changes the other must too, or the figure on screen stops
+ * matching the figure charged.
+ */
+export const VAT_ON_TOP = 0;
+
 /** Commission on parts — deliberately low so nobody routes around it. */
 export const PARTS_COMMISSION = 0.05;
 
@@ -309,9 +331,13 @@ export function fixedQuote(opts: {
   partsPrice?: number;
   calloutFee?: number;
   urgent?: boolean;
+  /** This service's rate. Big jobs carry less, or providers go around us. */
+  labourCommission?: number | null;
 }) {
   const URGENT_SURCHARGE = 0.25;
-  const VAT_RATE = 0.18;
+  const VAT_RATE = VAT_ON_TOP;
+  const COMMISSION = opts.labourCommission != null
+    ? Number(opts.labourCommission) : LABOUR_COMMISSION;
 
   const labour  = Number(opts.labourPrice) || 0;
   const callout = Number(opts.calloutFee)  || 0;
@@ -326,12 +352,13 @@ export function fixedQuote(opts: {
   const service    = +(exVat + vat).toFixed(2);
   const stripe     = +(service * 0.029 + 0.30).toFixed(2);
 
-  const labourCommission = +(labourSide * LABOUR_COMMISSION).toFixed(2);
+  const labourCommission = +(labourSide * COMMISSION).toFixed(2);
   const partsCommission  = +(parts * PARTS_COMMISSION).toFixed(2);
 
   return {
     labour, callout, parts, urgentFee,
     labourSide,
+    commissionRate: COMMISSION,
     exVat, vat,
     stripeFee: stripe,
     clientPays: +(service + stripe).toFixed(2),
@@ -340,6 +367,26 @@ export function fixedQuote(opts: {
     platform: +(labourCommission + partsCommission).toFixed(2),
     providerGets: +(labourSide - labourCommission + parts - partsCommission).toFixed(2),
   };
+}
+
+/**
+ * Work priced by the square metre (or metre, or panel).
+ *
+ * The minimum charge is not a detail: at €22/m² a four-square-metre
+ * bathroom is €88, and no tiler gives up a day's slot for that. Without
+ * a floor under the price the model quietly loses providers.
+ */
+export function unitLabour(opts: {
+  unitPrice?: number | null;
+  quantity?: number | null;
+  minCharge?: number | null;
+}) {
+  const rate = Number(opts.unitPrice) || 0;
+  const qty  = Number(opts.quantity)  || 0;
+  const min  = Number(opts.minCharge) || 0;
+  const raw  = +(rate * qty).toFixed(2);
+  const labour = Math.max(raw, min);
+  return { raw, labour: +labour.toFixed(2), minApplied: min > 0 && raw < min, rate, qty, min };
 }
 
 /** Straight-line distance in km — good enough to show how far a provider is */
@@ -467,6 +514,8 @@ export function effectiveService(
   questions: ServiceQuestion[];
   vehicles: string[];
   routePrices: Record<string, number>;
+  unitLabel: string; unitPrice: number; minCharge: number; unitBinding: boolean;
+  labourCommission: number;
   custom: boolean;
 } {
   const num = (a: any, b: any) => {
@@ -487,6 +536,15 @@ export function effectiveService(
                 : type.price_min != null ? Number(type.price_min) : null,
     priceMax:   own?.price_max != null ? Number(own.price_max)
                 : type.price_max != null ? Number(type.price_max) : null,
+    unitLabel:  type.unit_label || 'm\u00b2',
+    unitPrice:  num(own?.unit_price, type.unit_price),
+    minCharge:  num(own?.min_charge, type.min_charge),
+    // the provider decides whether their rate is a promise or an estimate
+    labourCommission: type.labour_commission != null
+                      ? Number(type.labour_commission) : LABOUR_COMMISSION,
+    unitBinding: own?.unit_binding != null
+                 ? !!own.unit_binding
+                 : !!type.unit_binding,
     custom:     !!own,
   };
 }
@@ -517,6 +575,9 @@ export async function seedProviderServices(providerId: string, tradeIds: string[
       price_min: t.price_min,
       price_max: t.price_max,
       typical_minutes: t.typical_minutes,
+      unit_price: t.unit_price,
+      min_charge: t.min_charge,
+      unit_binding: t.unit_binding,
     }));
 
   if (rows.length) await supabase.from('provider_services').insert(rows);

@@ -19,7 +19,7 @@ import { supabase } from '../lib/supabase';
 import {
   loadServiceTypes, loadServiceExtras, loadPropertySizes, loadTasksFor,
   groupTasks, quote, fixedQuote, estimateHours,
-  loadServicePrices, effectiveService, missingAnswers, answerAdjustments,
+  loadServicePrices, effectiveService, missingAnswers, answerAdjustments, unitLabour,
   type ServiceType, type ServiceExtra, type PropertySize, type ProviderService
 } from '../lib/services';
 
@@ -105,6 +105,7 @@ export default function BookingScreen() {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [manualHours, setManualHours] = useState<number|null>(null);
+  const [qty, setQty] = useState('');
 
   const [showTasks, setShowTasks]   = useState<string|null>(null);
   const [taskGroups, setTaskGroups] = useState<Record<string,string[]>>({});
@@ -114,8 +115,35 @@ export default function BookingScreen() {
 
   /** Everything below branches on this. */
   const model = svcType?.pricing_model ?? 'hourly';
-  const isFixed = model === 'fixed';
-  const isQuote = model === 'quote';
+
+  /**
+   * Work sold by the square metre. Each provider decides whether their
+   * rate is a promise or an estimate, so the same service behaves like
+   * fixed-price work for one and like a quote for another. Resolving it
+   * here means nothing downstream has to know per-unit pricing exists.
+   */
+  const isUnit = model === 'unit';
+  const unitOwn = pickedCleaner ? prices[pickedCleaner] : null;
+  const unitBinding = isUnit
+    ? (unitOwn?.unit_binding != null
+        ? !!unitOwn.unit_binding
+        : !!(svcType as any)?.unit_binding)
+    : false;
+
+  const isFixed = model === 'fixed' || (isUnit && unitBinding);
+  const isQuote = model === 'quote' || (isUnit && !unitBinding);
+
+  /**
+   * Extras were written for cleaning. Offering oven cleaning on a tiling
+   * job makes the whole flow look like it was built for something else.
+   */
+  const myExtras = extras.filter(e =>
+    (e.trade_id || 'cleaning') === (svcType?.trade_id || 'cleaning'));
+
+  /** Only cleaning is priced off the size of the home. */
+  const usesSize = (svcType?.trade_id || 'cleaning') === 'cleaning';
+
+  const showExtras = !isFixed && !isQuote && myExtras.length > 0;
   const isTransport = !!(svcType as any)?.is_transport;
 
   const band = bandFor(fromLoc, toLoc);
@@ -126,18 +154,19 @@ export default function BookingScreen() {
     ? ['Service','Route','Provider','When','Confirm']
     : (isFixed || isQuote)
     ? ['Service','Provider','Details','When','Confirm']
-    : ['Service','Place','Extras','Provider','When','Confirm'];
+    : showExtras
+    ? ['Service','Place','Extras','Provider','When','Confirm']
+    : ['Service','Place','Provider','When','Confirm'];
 
   // which screen is which, by name rather than number
   const stepName = STEPS[step];
 
   const multiplier  = svcType?.multiplier ?? 1;
   const baseMinutes = svcType?.base_minutes ?? 120;
-  const sizeFactor  = sizeObj?.factor ?? 1;
+  const sizeFactor  = usesSize ? (sizeObj?.factor ?? 1) : 1;
   const svcMinHours = svcType?.min_hours ?? 3;
 
-  const showExtras = !isFixed && !isQuote;
-  const selectedExtras = showExtras ? extras.filter(e => chosenExtras.includes(e.id)) : [];
+  const selectedExtras = showExtras ? myExtras.filter(e => chosenExtras.includes(e.id)) : [];
   const extraMinutes   = selectedExtras.reduce((s,e)=>s+Number(e.extra_minutes),0);
 
   const teamSizeOf = (c: any) => {
@@ -198,13 +227,22 @@ export default function BookingScreen() {
   // The platform's typical figures, used while they're still answering
   const adj = answerAdjustments(qs0, answers, myEff?.optionPrices);
 
+  const unitSum = isUnit ? unitLabour({
+    unitPrice: myEff?.unitPrice, quantity: Number(qty), minCharge: myEff?.minCharge,
+  }) : null;
+
+  const commRate = myEff?.labourCommission;
+
   const flatQuote = fixedQuote({
-    labourPrice: (myEff?.labour ?? Number(svcType?.labour_price) ?? 0) + adj.labour,
+    labourCommission: commRate,
+    labourPrice: (unitSum ? unitSum.labour
+                 : (myEff?.labour ?? Number(svcType?.labour_price) ?? 0)) + adj.labour,
     partsPrice:  (myEff?.parts  ?? Number(svcType?.parts_price)  ?? 0) + adj.parts,
     calloutFee:  Number(svcType?.callout_fee) || 0,
   });
 
-  const transportQuote = fixedQuote({ labourPrice: myRoutePrice || 0, partsPrice: 0 });
+  const transportQuote = fixedQuote({
+    labourPrice: myRoutePrice || 0, partsPrice: 0, labourCommission: commRate });
 
   const grossTotal = isQuote ? 0
     : isTransport ? transportQuote.clientPays
@@ -219,6 +257,23 @@ export default function BookingScreen() {
   const quoteFor = (c: any) => {
     const eff = effFor(c.id);
 
+    if (isUnit) {
+      const own = answerAdjustments(eff?.questions as any, answers, eff?.optionPrices);
+      const u = unitLabour({
+        unitPrice: eff?.unitPrice, quantity: Number(qty), minCharge: eff?.minCharge,
+      });
+      if (!u.rate) return { total: null as number|null, label: 'no price' };
+      if (!u.qty)  return { total: null as number|null,
+                            label: `\u20ac${u.rate}/${eff?.unitLabel || 'm\u00b2'}` };
+      const q = fixedQuote({ labourPrice: u.labour + own.labour, partsPrice: own.parts,
+                             labourCommission: eff?.labourCommission });
+      return {
+        total: q.clientPays,
+        label: (eff?.unitBinding ? 'fixed' : 'estimate')
+             + (u.minApplied ? ' \u00b7 minimum' : ''),
+      };
+    }
+
     if (isQuote) {
       return {
         total: null as number|null,
@@ -232,7 +287,8 @@ export default function BookingScreen() {
       const cheapest = cheapestRoute(eff?.routePrices);
       const base = p ?? cheapest;
       if (base == null) return { total: null as number|null, label: 'no price' };
-      const q = fixedQuote({ labourPrice: base, partsPrice: 0 });
+      const q = fixedQuote({ labourPrice: base, partsPrice: 0,
+                             labourCommission: eff?.labourCommission });
       return { total: q.clientPays, label: p != null ? bandLabel(band) : 'from' };
     }
 
@@ -242,6 +298,7 @@ export default function BookingScreen() {
       const q = fixedQuote({
         labourPrice: (eff?.labour || 0) + own.labour,
         partsPrice:  (eff?.parts  || 0) + own.parts,
+        labourCommission: eff?.labourCommission,
       });
       return { total: q.clientPays, label: fmtM(eff?.minutes || 60) };
     }
@@ -298,7 +355,7 @@ export default function BookingScreen() {
     loadServicePrices(svc).then(setPrices);
   }, [svc]);
 
-  useEffect(() => { setAnswers({}); }, [svc]);
+  useEffect(() => { setAnswers({}); setQty(''); }, [svc]);
 
   useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
   useEffect(() => { if (date && time && !slotAvailable(date, time)) setTime(''); }, [date]);
@@ -349,7 +406,10 @@ export default function BookingScreen() {
         labourTotal: isTransport ? transportQuote.labour : isFixed ? flatQuote.labourSide : null,
         partsTotal:  isFixed ? flatQuote.parts : 0,
         locationNote: notes.trim() || null,
-        answers,
+        // the area travels with the answers so the provider sees what was priced
+        answers: isUnit
+          ? { ...answers, area: `${qty} ${myEff?.unitLabel || 'm\u00b2'}` }
+          : answers,
         fromLocality: isTransport ? fromLoc : null,
         toLocality:   isTransport ? toLoc : null,
         vehicleType:  isTransport ? vehicle : null,
@@ -379,7 +439,7 @@ export default function BookingScreen() {
   const unanswered = missingAnswers(qs, answers);
 
   const canContinue =
-    stepName === 'Service'  ? !!svc :
+    stepName === 'Service'  ? !!svc && (!isUnit || Number(qty) > 0) :
     stepName === 'Place'    ? !!address && unanswered.length === 0 :
     stepName === 'Route'    ? !!fromLoc && !!toLoc && !!vehicle && !!loadNote.trim() :
     stepName === 'Details'  ? !!address && unanswered.length === 0 :
@@ -388,7 +448,7 @@ export default function BookingScreen() {
     true;
 
   const blockedMsg =
-    stepName === 'Service'  ? 'Pick a service' :
+    stepName === 'Service'  ? (svc && isUnit ? 'Enter the area' : 'Pick a service') :
     stepName === 'Route'    ? (!fromLoc || !toLoc ? 'Pick both ends of the run'
                                : !vehicle ? 'Pick a vehicle'
                                : 'Say what you\u2019re moving') :
@@ -653,11 +713,47 @@ export default function BookingScreen() {
                   );
                 })}
 
-                {isQuote && (
+                {isUnit && (
+                  <>
+                    <Text style={s.lbl}>
+                      How much area? ({myEff?.unitLabel || svcType?.unit_label || 'm²'})
+                    </Text>
+                    <TextInput style={s.input} value={qty}
+                      onChangeText={(v)=>setQty(v.replace(/[^0-9.]/g,''))}
+                      keyboardType="decimal-pad" placeholder="e.g. 24"
+                      placeholderTextColor={C.muted} />
+                    <Text style={s.note}>
+                      Rough is fine — length × width of each area, added up. We ask now
+                      so you can compare what each provider would actually charge,
+                      not just their rate.
+                    </Text>
+                    {unitSum?.minApplied && (
+                      <View style={s.fixedNote}>
+                        <Text style={s.fixedNoteTxt}>
+                          ℹ️  Small jobs have a minimum charge, so this comes to
+                          €{unitSum.min} rather than €{unitSum.raw}. Worth adding any
+                          other area you want done at the same visit.
+                        </Text>
+                      </View>
+                    )}
+                  </>
+                )}
+
+                {isQuote && !isUnit && (
                   <View style={s.fixedNote}>
                     <Text style={s.fixedNoteTxt}>
                       💬  You'll message your provider first. They send a price, you
                       accept or decline — nobody travels until you've agreed.
+                    </Text>
+                  </View>
+                )}
+
+                {isUnit && (
+                  <View style={s.fixedNote}>
+                    <Text style={s.fixedNoteTxt}>
+                      📐  Priced by the {myEff?.unitLabel || 'm²'}. Some providers hold
+                      that price, others treat it as an estimate and confirm once
+                      they've seen photos — each card says which.
                     </Text>
                   </View>
                 )}
@@ -681,16 +777,20 @@ export default function BookingScreen() {
           <View style={s.step}>
             <Text style={s.stepIntro}>Tell us about the place</Text>
 
-            <Text style={s.lbl}>How big is it?</Text>
-            <View style={s.sizeGrid}>
-              {sizes.map(z=>(
-                <TouchableOpacity key={z.id} style={[s.sizeCard, size===z.id&&s.sizeCardOn]}
-                  onPress={()=>setSize(z.id)}>
-                  <Text style={s.sizeIcon}>{z.icon}</Text>
-                  <Text style={[s.sizeName, size===z.id&&s.sizeNameOn]}>{z.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {usesSize && (
+              <>
+                <Text style={s.lbl}>How big is it?</Text>
+                <View style={s.sizeGrid}>
+                  {sizes.map(z=>(
+                    <TouchableOpacity key={z.id} style={[s.sizeCard, size===z.id&&s.sizeCardOn]}
+                      onPress={()=>setSize(z.id)}>
+                      <Text style={s.sizeIcon}>{z.icon}</Text>
+                      <Text style={[s.sizeName, size===z.id&&s.sizeNameOn]}>{z.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
 
             <Text style={s.lbl}>Where should we come?</Text>
             {AddressBlock}
@@ -830,7 +930,7 @@ export default function BookingScreen() {
               Each one adds time to the job. Skip this step if you don't need any.
             </Text>
 
-            {extras.map(e=>{
+            {myExtras.map(e=>{
               const on = chosenExtras.includes(e.id);
               return (
                 <TouchableOpacity key={e.id} style={[s.extraRow, on&&s.extraRowOn]}
@@ -1127,7 +1227,8 @@ export default function BookingScreen() {
                   ['Vehicle', vehicleLabel(vehicle)],
                   ['Load',    loadNote],
                 ] : []),
-                ...(isFixed ? [] : [['Property', `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`]]),
+                ...((isFixed || !usesSize) ? []
+                    : [['Property', `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`]]),
                 ['Address',  address || '—'],
                 ['Date',     date ? new Date(date+'T00:00:00').toLocaleDateString('en-GB',
                                {weekday:'long', day:'numeric', month:'long'}) : '—'],
@@ -1180,7 +1281,8 @@ export default function BookingScreen() {
                 <>
                   {[
                     [`${bandLabel(band)} · ${vehicleLabel(vehicle)}`, `€${transportQuote.labour.toFixed(2)}`],
-                    ['VAT 18%',  `€${transportQuote.vat.toFixed(2)}`],
+                    ...(transportQuote.vat > 0
+                        ? [['VAT', `€${transportQuote.vat.toFixed(2)}`]] : []),
                     ['Card fee', `€${transportQuote.stripeFee.toFixed(2)}`],
                   ].map(([l,v])=>(
                     <View key={String(l)} style={s.priceRow}>
@@ -1201,7 +1303,8 @@ export default function BookingScreen() {
                       ? [[svcType.parts_label || 'Parts', `€${(flatQuote.parts - adj.parts).toFixed(2)}`]] : []),
                     ...adj.lines.filter(x=>x.kind==='parts')
                       .map(x=>[x.label, `€${x.amount.toFixed(2)}`]),
-                    ['VAT 18%',   `€${flatQuote.vat.toFixed(2)}`],
+                    ...(flatQuote.vat > 0
+                        ? [['VAT', `€${flatQuote.vat.toFixed(2)}`]] : []),
                     ['Card fee',  `€${flatQuote.stripeFee.toFixed(2)}`],
                   ].map(([l,v])=>(
                     <View key={String(l)} style={s.priceRow}>
@@ -1227,7 +1330,8 @@ export default function BookingScreen() {
                     [`${svcType.name} rate  ×${multiplier}`, `€${(baseRate*multiplier).toFixed(2)}/hr`],
                     ...(suppliesByCleaner ? [['Materials surcharge', '+€2.00/hr']] : []),
                     [`${fmtH(hours)} × ${num}`, `€${hourlyQuote.exVat.toFixed(2)}`],
-                    ['VAT 18% (agency)', `€${hourlyQuote.vat.toFixed(2)}`],
+                    ...(hourlyQuote.vat > 0
+                        ? [['VAT', `€${hourlyQuote.vat.toFixed(2)}`]] : []),
                     ['Card fee', `€${hourlyQuote.stripeFee.toFixed(2)}`],
                   ].map(([l,v])=>(
                     <View key={String(l)} style={s.priceRow}>

@@ -15,6 +15,40 @@ import { missingAnswers, answerAdjustments } from '../lib/services';
 
 const STEPS = ['Problem','Location','Vehicle','Confirm'];
 
+/**
+ * Non-urgent callouts still need a when. We ask for a window rather than a
+ * clock time: a provider juggling three jobs cannot promise 14:30, and a
+ * missed promise costs them a rating. A window is a promise both sides can keep.
+ */
+type Slot = 'tonight' | 'tom_am' | 'tom_pm' | 'tom_eve';
+
+const SLOTS: Record<Slot, { label: string; window: string; hour: number; tomorrow: boolean }> = {
+  tonight: { label: 'This evening',      window: 'Before 21:00 today', hour: 18, tomorrow: false },
+  tom_am:  { label: 'Tomorrow morning',  window: '08:00 \u2013 12:00',  hour: 8,  tomorrow: true  },
+  tom_pm:  { label: 'Tomorrow afternoon',window: '12:00 \u2013 17:00',  hour: 12, tomorrow: true  },
+  tom_eve: { label: 'Tomorrow evening',  window: '17:00 \u2013 21:00',  hour: 17, tomorrow: true  },
+};
+
+/** After 18:00 "this evening" is really "right now" — and that carries a surcharge. */
+const slotsNow = (): Slot[] => {
+  const h = new Date().getHours();
+  return h < 18
+    ? ['tonight','tom_am','tom_pm','tom_eve']
+    : ['tom_am','tom_pm','tom_eve'];
+};
+
+const slotText = (sl: Slot|null) =>
+  sl ? `${SLOTS[sl].label} (${SLOTS[sl].window})` : 'Within a day';
+
+const slotWhen = (sl: Slot) => {
+  const d = new Date();
+  if (SLOTS[sl].tomorrow) d.setDate(d.getDate() + 1);
+  return {
+    date: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`,
+    time: `${String(SLOTS[sl].hour).padStart(2,'0')}:00`,
+  };
+};
+
 export default function Roadside() {
   const { addBooking, availableTrades, providersFor } = useApp();
   const { trade } = useLocalSearchParams<{trade?: string}>();
@@ -36,6 +70,7 @@ export default function Roadside() {
   const [locDenied, setDenied]= useState(false);
   const [manualAddr, setManual] = useState('');
   const [vehicle, setVehicle] = useState('');
+  const [slot, setSlot]       = useState<Slot|null>(null);
   const [answers, setAnswers] = useState<Record<string,string>>({});
 
   const type = types.find(t => t.id === svc) || null;
@@ -45,6 +80,7 @@ export default function Roadside() {
   const qs = qs0;
   const unanswered = missingAnswers(qs, answers);
   const p = type ? fixedQuote({
+    labourCommission: type.labour_commission,
     labourPrice: (Number(type.labour_price ?? type.fixed_price) || 0) + adj.labour,
     partsPrice:  (Number(type.parts_price) || 0) + adj.parts,
     calloutFee:  Number(type.callout_fee) || 0,
@@ -88,11 +124,15 @@ export default function Roadside() {
     setSub(true); setFailed('');
     try {
       const now = new Date();
+      const when = (!urgent && slot) ? slotWhen(slot) : {
+        date: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`,
+        time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
+      };
       await addBooking({
         cleanerId: '',
         address: locLabel || manualAddr || 'Roadside',
-        date: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`,
-        time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
+        date: when.date,
+        time: when.time,
         hours: (Number(type.typical_minutes) || 30) / 60,
         numCleaners: 1,
         propertyType: 'vehicle',
@@ -116,7 +156,9 @@ export default function Roadside() {
         locationAccuracy: coords?.accuracy ?? null,
         locationNote: locNote || null,
         vehicleInfo: vehicle || null,
-        answers,
+        // the window rides along with the answers so the provider sees it
+        // on their job card without a new column
+        answers: (!urgent && slot) ? { ...answers, when: slotText(slot) } : answers,
         releasedToPool: true,
       });
 
@@ -127,6 +169,7 @@ export default function Roadside() {
         total: isQuoteJob ? 0 : (p?.clientPays || 0),
         isQuote: isQuoteJob,
         urgent,
+        when: slotText(slot),
       });
     } catch (e: any) {
       console.error('Roadside request failed:', e);
@@ -135,7 +178,7 @@ export default function Roadside() {
   };
 
   const canContinue =
-    step === 0 ? !!svc :
+    step === 0 ? !!svc && (urgent || !!slot) :
     step === 1 ? !!coords || !!manualAddr :
     step === 2 ? unanswered.length === 0 :
     true;
@@ -156,7 +199,7 @@ export default function Roadside() {
           {[
             ['Problem', `${placed.icon || ''} ${placed.service}`],
             ['Where',   placed.where || '—'],
-            ['Timing',  placed.urgent ? 'Right now' : 'Within a day'],
+            ['Timing',  placed.urgent ? 'Right now' : placed.when],
             ...(placed.isQuote ? [] : [['You pay', `€${Number(placed.total).toFixed(2)}`]]),
           ].map(([l,v])=>(
             <View key={String(l)} style={s.summRow}>
@@ -235,6 +278,7 @@ export default function Roadside() {
               const on = svc === t.id;
               const byQuote = t.pricing_model === 'quote';
               const q  = fixedQuote({
+                labourCommission: t.labour_commission,
                 labourPrice: Number(t.labour_price ?? t.fixed_price) || 0,
                 partsPrice:  Number(t.parts_price) || 0,
                 calloutFee:  Number(t.callout_fee) || 0,
@@ -275,14 +319,32 @@ export default function Roadside() {
               ].map(o=>(
                 <TouchableOpacity key={String(o.k)}
                   style={[s.urgCard, urgent===o.k&&s.urgCardOn]}
-                  onPress={()=>setUrgent(o.k)}>
+                  onPress={()=>{ setUrgent(o.k); if (o.k) setSlot(null); }}>
                   <Text style={[s.urgLbl, urgent===o.k&&s.urgLblOn]}>{o.l}</Text>
                   <Text style={s.urgDesc}>{o.d}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-            {urgent && (
+            {urgent ? (
               <Text style={s.urgNote}>Immediate callouts carry a 25% surcharge.</Text>
+            ) : (
+              <>
+                <Text style={s.lbl}>When suits you?</Text>
+                <View style={s.slotWrap}>
+                  {slotsNow().map(k=>(
+                    <TouchableOpacity key={k}
+                      style={[s.slotCard, slot===k&&s.slotCardOn]}
+                      onPress={()=>setSlot(k)}>
+                      <Text style={[s.slotLbl, slot===k&&s.slotLblOn]}>{SLOTS[k].label}</Text>
+                      <Text style={s.slotWin}>{SLOTS[k].window}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={s.smallNote}>
+                  They arrive inside this window. If you need someone sooner,
+                  pick "Right now" instead.
+                </Text>
+              </>
             )}
           </View>
         )}
@@ -400,7 +462,7 @@ export default function Roadside() {
                 ['Problem',  `${type.icon}  ${type.name}`],
                 ['Where',    locLabel || manualAddr || '—'],
                 ['Vehicle',  vehicle || 'Not given'],
-                ['Timing',   urgent ? 'Right now' : 'Within a day'],
+                ['Timing',   urgent ? 'Right now' : slotText(slot)],
                 ['On site',  `about ${type.typical_minutes} min`],
                 ...qs.filter((q:any)=>answers[q.id]).map((q:any)=>[q.label, answers[q.id]]),
               ].map(([l,v])=>(
@@ -433,7 +495,7 @@ export default function Roadside() {
                 ...adj.lines.map(x=>[x.label, `€${x.amount.toFixed(2)}`]),
                 ['Callout',      `€${p.callout.toFixed(2)}`],
                 ...(p.urgentFee ? [['Immediate callout (25%)', `€${p.urgentFee.toFixed(2)}`]] : []),
-                ['VAT 18%',      `€${p.vat.toFixed(2)}`],
+                ...(p.vat > 0 ? [['VAT', `€${p.vat.toFixed(2)}`]] : []),
                 ['Card fee',     `€${p.stripeFee.toFixed(2)}`],
               ].map(([l,v])=>(
                 <View key={String(l)} style={s.priceRow}>
@@ -458,9 +520,10 @@ export default function Roadside() {
             <View style={s.fixedNote}>
               <Text style={s.fixedTitle}>🔒  This price is fixed</Text>
               <Text style={s.fixedTxt}>
-                No timer and no hourly rate. If the job turns out to need parts
-                beyond the standard fix, your provider quotes you separately before
-                doing anything.
+                No timer and no hourly rate.
+                {(type as any).parts_possible === false
+                  ? ' The price above is the whole job.'
+                  : ' If the job turns out to need parts beyond the standard fix, your provider quotes you separately before doing anything.'}
               </Text>
               <Text style={s.fixedTxt}>
                 Nothing is charged until the work is done and you confirm it.
@@ -495,7 +558,8 @@ export default function Roadside() {
           {submitting ? <ActivityIndicator color={C.white}/> :
             <Text style={s.nextBtnTxt}>
               {!canContinue
-                ? (step===0 ? 'Pick a problem' : 'Share or type where you are')
+                ? (step===0 ? (svc ? 'Pick a time' : 'Pick a problem')
+                             : 'Share or type where you are')
                 : unanswered.length > 0 ? 'Answer the questions above'
                 : step===2 && !vehicle && qs.length === 0 ? 'Skip  →'
                 : step<STEPS.length-1 ? 'Continue  →'
@@ -553,6 +617,13 @@ const s = StyleSheet.create({
   urgLblOn:{color:C.amber},
   urgDesc:{fontSize:11,color:C.muted,marginTop:4,lineHeight:15},
   urgNote:{fontSize:11,color:C.amber,fontWeight:'700',marginTop:10},
+  slotWrap:{flexDirection:'row',flexWrap:'wrap',gap:10},
+  slotCard:{flexGrow:1,flexBasis:'45%',padding:13,borderRadius:14,borderWidth:1.5,
+    borderColor:C.border,backgroundColor:C.white},
+  slotCardOn:{borderColor:C.amber,backgroundColor:C.amberLt},
+  slotLbl:{fontSize:13,fontWeight:'800',color:C.muted},
+  slotLblOn:{color:C.amber},
+  slotWin:{fontSize:11,color:C.muted,marginTop:3},
 
   locBox:{backgroundColor:C.white,borderRadius:16,padding:28,alignItems:'center',gap:10,borderWidth:1,borderColor:C.border},
   locBusyTxt:{fontSize:13,color:C.muted},

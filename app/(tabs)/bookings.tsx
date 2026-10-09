@@ -242,7 +242,7 @@ export default function Bookings() {
                   <Text style={[st.initials,{color:cleaner?.color||C.primary}]}>{cleaner?.initials||'?'}</Text>
                 </View>
                 <View style={{flex:1}}>
-                  <Text style={st.cleanerName}>{cleaner?.name||'Cleaner'}</Text>
+                  <Text style={st.cleanerName}>{cleaner?.name || 'Not assigned yet'}</Text>
                   <Text style={st.cleanerSub}>
                     {serviceTypes[b.serviceType]
                       ? `${serviceTypes[b.serviceType].icon} ${serviceTypes[b.serviceType].name}`
@@ -288,7 +288,7 @@ export default function Bookings() {
                 return (
                   <View style={st.chooseBox}>
                     <Text style={st.chooseTitle}>
-                      😕  {cleaner?.name||'Your provider'} hasn't responded
+                      😕  Your provider hasn't responded
                     </Text>
                     <Text style={st.chooseTxt}>
                       {alone
@@ -336,7 +336,7 @@ export default function Bookings() {
                             <Text style={st.whiteTxt}>
                               {isBusy?'…'
                                 : alternatives.length === 1
-                                ? `🔔  Ask ${alternatives[0].name.split(' ')[0]} instead`
+                                ? `🔔  Ask another provider`
                                 : '🌐  Ask the others too'}
                             </Text>
                           </TouchableOpacity>
@@ -417,7 +417,7 @@ export default function Bookings() {
                           {pool.length === 0
                             ? "Nobody covering this is free at the moment. We'll keep looking and message you the moment someone can take it."
                             : pool.length === 1
-                            ? `${pool[0].name.split(' ')[0]} is the one provider covering this in your area. They've been notified.`
+                            ? `We've notified everyone covering this in your area. You'll hear the moment someone accepts.`
                             : `All ${pool.length} providers covering this have been notified. The first to accept takes the job.`}
                         </Text>
                       </>

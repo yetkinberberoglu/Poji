@@ -3,7 +3,7 @@ import {
   TextInput, ActivityIndicator, Switch
 } from 'react-native';
 import { router } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { findTrade } from '../constants/trades';
@@ -12,7 +12,7 @@ import RoutePricing from '../components/RoutePricing';
 import { cheapestRoute } from '../lib/transport';
 import {
   loadServiceTypes, loadProviderServices, seedProviderServices,
-  effectiveService, fixedQuote, optionLabel, optionDelta,
+  effectiveService, fixedQuote, optionLabel, optionDelta, unitLabour,
   type ServiceType, type ProviderService,
 } from '../lib/services';
 
@@ -35,6 +35,18 @@ export default function MyServices() {
 
   const [draft, setDraft] = useState<any>({});
 
+  /**
+   * What the form looked like when it opened. Anything different means
+   * unsaved work, and unsaved work is never allowed to disappear quietly:
+   * a provider who thinks they changed their price and didn't will blame
+   * us for the booking that comes in at the old one.
+   */
+  const [baseline, setBaseline] = useState('');
+  const [confirmDiscard, setConfirm] = useState<null | { next?: ServiceType }>(null);
+  const [savedAt, setSavedAt] = useState('');
+
+  const dirty = !!editing && JSON.stringify(draft) !== baseline;
+
   const load = async () => {
     const { data:{ user } } = await supabase.auth.getUser();
     if (!user) { router.replace('/auth'); return; }
@@ -56,16 +68,33 @@ export default function MyServices() {
 
   useEffect(() => { load(); }, []);
 
+  const leavingScreen = useRef(false);
+
+  const goBack = () => {
+    if (dirty) { leavingScreen.current = true; setConfirm({}); return; }
+    router.back();
+  };
+
+  // the confirmation clears itself once the work is saved
+  useEffect(() => {
+    if (!savedAt) return;
+    const t = setTimeout(() => setSavedAt(''), 5000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
+
   const startEdit = (t: ServiceType) => {
     const own = mine[t.id];
     const eff = effectiveService(t, own);
-    setDraft({
+    const fresh = {
       labour_price: String(eff.labour || ''),
       parts_price:  String(eff.parts || ''),
       parts_label:  eff.partsLabel || '',
       price_min:    eff.priceMin != null ? String(eff.priceMin) : '',
       price_max:    eff.priceMax != null ? String(eff.priceMax) : '',
       typical_minutes: String(eff.minutes),
+      unit_price: eff.unitPrice ? String(eff.unitPrice) : '',
+      min_charge: eff.minCharge ? String(eff.minCharge) : '',
+      unit_binding: eff.unitBinding,
       note: own?.note || '',
       option_prices: { ...(own?.option_prices || {}) },
       vehicles: own?.vehicles || [],
@@ -73,9 +102,27 @@ export default function MyServices() {
       questions: own?.questions?.length
         ? JSON.parse(JSON.stringify(own.questions))
         : JSON.parse(JSON.stringify(t.questions || [])),
-    });
+    };
+    setDraft(fresh);
+    setBaseline(JSON.stringify(fresh));
     setEdit(t.id);
     setError('');
+    setSavedAt('');
+  };
+
+  /** Opening another service, cancelling or leaving all go through here. */
+  const leaveEdit = (next?: ServiceType) => {
+    if (dirty) { setConfirm({ next }); return; }
+    setEdit(null); setError('');
+    if (next) startEdit(next);
+  };
+
+  const discardNow = () => {
+    const next = confirmDiscard?.next;
+    setConfirm(null);
+    setEdit(null); setError(''); setBaseline('');
+    if (next) startEdit(next);
+    else if (leavingScreen.current) router.back();
   };
 
   const saveOne = async (t: ServiceType) => {
@@ -90,11 +137,15 @@ export default function MyServices() {
       if (!Object.keys(draft.route_prices || {}).length) {
         setError('Price at least one run'); return;
       }
+    } else if (t.pricing_model === 'unit') {
+      if (!Number(draft.unit_price)) { setError('Set your price per ' + (t.unit_label || 'm²')); return; }
     } else if (t.pricing_model === 'fixed') {
       if (!Number(draft.labour_price)) { setError('Set your service charge'); return; }
     }
 
     setSaving(true);
+    setError('');
+    try {
     const { data:{ user } } = await supabase.auth.getUser();
 
     const { error: e } = await supabase.from('provider_services').upsert({
@@ -107,6 +158,9 @@ export default function MyServices() {
       price_min:    isQuote ? Number(draft.price_min) : null,
       price_max:    isQuote ? Number(draft.price_max) : null,
       typical_minutes: Number(draft.typical_minutes) || 60,
+      unit_price:   Number(draft.unit_price) || null,
+      min_charge:   Number(draft.min_charge) || null,
+      unit_binding: draft.unit_binding === true,
       note: draft.note.trim() || null,
       vehicles: draft.vehicles || [],
       route_prices: draft.route_prices || {},
@@ -115,11 +169,19 @@ export default function MyServices() {
       updated_at: new Date().toISOString(),
     }, { onConflict: 'provider_id,service_type_id' });
 
-    setSaving(false);
     if (e) { setError(e.message); return; }
 
     setMine(await loadProviderServices(user!.id));
+    setBaseline(JSON.stringify(draft));
+    setSavedAt(new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
     setEdit(null);
+    } catch (err: any) {
+      // Without this the button stays spinning for ever and the provider
+      // has no idea anything went wrong.
+      setError(err?.message || 'Could not save that. Check your connection and try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggleActive = async (t: ServiceType, on: boolean) => {
@@ -144,7 +206,7 @@ export default function MyServices() {
   return (
     <View style={s.wrap}>
       <View style={s.hdr}>
-        <TouchableOpacity onPress={()=>router.back()}>
+        <TouchableOpacity onPress={goBack}>
           <Text style={s.back}>← Back</Text>
         </TouchableOpacity>
         <Text style={s.title}>My services</Text>
@@ -189,11 +251,13 @@ export default function MyServices() {
                 const on  = own?.active !== false;
                 const eff = effectiveService(t, own);
                 const isQuote = t.pricing_model === 'quote';
+                const isUnit  = t.pricing_model === 'unit';
                 const isHourly= (t.pricing_model ?? 'hourly') === 'hourly';
                 const open = editing === t.id;
 
-                const q = !isQuote && !isHourly ? fixedQuote({
+                const q = !isQuote && !isUnit && !isHourly ? fixedQuote({
                   labourPrice: eff.labour, partsPrice: eff.parts,
+                  labourCommission: eff.labourCommission,
                 }) : null;
 
                 return (
@@ -210,6 +274,11 @@ export default function MyServices() {
                               ? (cheapestRoute(own?.route_prices) != null
                                   ? `${(own?.vehicles||[]).length} vehicle${(own?.vehicles||[]).length===1?'':'s'} · from €${cheapestRoute(own?.route_prices)}`
                                   : 'Set your vehicles and prices')
+                              : isUnit ? (eff.unitPrice
+                                  ? `€${eff.unitPrice}/${eff.unitLabel}`
+                                    + (eff.minCharge ? ` · min €${eff.minCharge}` : '')
+                                    + (eff.unitBinding ? ' · fixed' : ' · estimate')
+                                  : `Set your price per ${eff.unitLabel}`)
                               : isHourly ? 'Charged at your hourly rate'
                               : isQuote ? (eff.priceMin && eff.priceMax
                                   ? `€${eff.priceMin} – €${eff.priceMax} · you quote after talking`
@@ -245,7 +314,7 @@ export default function MyServices() {
                     </View>
 
                     {on && !isHourly && !open && (
-                      <TouchableOpacity style={s.editBtn} onPress={()=>startEdit(t)}>
+                      <TouchableOpacity style={s.editBtn} onPress={()=>leaveEdit(t)}>
                         <Text style={s.editTxt}>Change my price ›</Text>
                       </TouchableOpacity>
                     )}
@@ -258,6 +327,83 @@ export default function MyServices() {
                             prices={draft.route_prices || {}}
                             onChange={(v,p)=>setDraft((d:any)=>({ ...d, vehicles:v, route_prices:p }))}
                           />
+                        ) : isUnit ? (
+                          <>
+                            <Text style={s.formHint}>
+                              This work is sold by the {t.unit_label || 'm²'}. The client
+                              enters the area before they even see you, so what they
+                              compare is your total for their job, not your rate.
+                            </Text>
+
+                            <Text style={s.lbl}>Your price per {t.unit_label || 'm²'} (€)</Text>
+                            <TextInput style={s.input} value={draft.unit_price}
+                              onChangeText={(v)=>setDraft((d:any)=>({...d, unit_price:v.replace(/[^0-9.]/g,'')}))}
+                              keyboardType="decimal-pad" placeholder="22"
+                              placeholderTextColor={C.muted} />
+                            <Text style={s.note}>Your labour only. Materials are separate.</Text>
+
+                            <Text style={s.lbl}>Minimum charge (€)</Text>
+                            <TextInput style={s.input} value={draft.min_charge}
+                              onChangeText={(v)=>setDraft((d:any)=>({...d, min_charge:v.replace(/[^0-9.]/g,'')}))}
+                              keyboardType="decimal-pad" placeholder="150"
+                              placeholderTextColor={C.muted} />
+                            <Text style={s.note}>
+                              A four-square-metre bathroom at €22 is €88 — not worth
+                              losing a day over. The minimum is what you'd accept to
+                              turn up at all.
+                            </Text>
+
+                            <Text style={s.lbl}>Is that price a promise?</Text>
+                            <View style={s.row2}>
+                              {[
+                                { k:true,  l:'Fixed price',
+                                  d:'Client books instantly at your rate × their area' },
+                                { k:false, l:'Estimate first',
+                                  d:'They see the figure, you confirm after photos' },
+                              ].map(o=>(
+                                <TouchableOpacity key={String(o.k)}
+                                  style={[s.bindCard, draft.unit_binding===o.k&&s.bindCardOn]}
+                                  onPress={()=>setDraft((d:any)=>({...d, unit_binding:o.k}))}>
+                                  <Text style={[s.bindLbl, draft.unit_binding===o.k&&s.bindLblOn]}>
+                                    {o.l}
+                                  </Text>
+                                  <Text style={s.bindDesc}>{o.d}</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                            <Text style={s.note}>
+                              Fixed wins more bookings because there's nothing left to
+                              agree. Only choose it where the job really is the same
+                              every time — if the floor underneath can surprise you,
+                              take the estimate.
+                            </Text>
+
+                            {Number(draft.unit_price) > 0 && (() => {
+                              const sample = unitLabour({
+                                unitPrice: Number(draft.unit_price), quantity: 20,
+                                minCharge: Number(draft.min_charge),
+                              });
+                              const p = fixedQuote({ labourPrice: sample.labour,
+                                labourCommission: t.labour_commission });
+                              return (
+                                <View style={s.previewBox}>
+                                  <View style={s.previewRow}>
+                                    <Text style={s.previewLbl}>
+                                      A 20 {t.unit_label || 'm²'} job — client pays
+                                    </Text>
+                                    <Text style={s.previewVal}>€{p.clientPays.toFixed(2)}</Text>
+                                  </View>
+                                  <View style={s.previewRow}>
+                                    <Text style={s.previewLbl}>You keep</Text>
+                                    <Text style={[s.previewVal,{color:C.green,fontWeight:'800'}]}>
+                                      €{p.providerGets.toFixed(2)}
+                                    </Text>
+                                  </View>
+                                  <Text style={s.previewNote}>20% on the work.</Text>
+                                </View>
+                              );
+                            })()}
+                          </>
                         ) : isQuote ? (
                           <>
                             <Text style={s.formHint}>
@@ -351,6 +497,7 @@ export default function MyServices() {
                           const preview = fixedQuote({
                             labourPrice: Number(draft.labour_price),
                             partsPrice: Number(draft.parts_price) || 0,
+                            labourCommission: t.labour_commission,
                           });
                           return (
                             <View style={s.previewBox}>
@@ -365,7 +512,8 @@ export default function MyServices() {
                                 </Text>
                               </View>
                               <Text style={s.previewNote}>
-                                20% on the work, 5% on the parts.
+                                {Math.round((t.labour_commission ?? 0.20)*100)}% on the work,
+                                5% on the parts.
                               </Text>
                             </View>
                           );
@@ -373,7 +521,7 @@ export default function MyServices() {
 
                         <View style={s.formBtns}>
                           <TouchableOpacity style={s.cancelBtn}
-                            onPress={()=>{setEdit(null);setError('');}}>
+                            onPress={()=>leaveEdit()}>
                             <Text style={s.cancelTxt}>Cancel</Text>
                           </TouchableOpacity>
                           <TouchableOpacity style={[s.saveBtn, saving&&s.dis]}
@@ -391,8 +539,46 @@ export default function MyServices() {
           );
         })}
 
-        <View style={{height:40}}/>
+        <View style={{height:120}}/>
       </ScrollView>
+
+      {(confirmDiscard || (editing && (dirty || !!error)) || !!savedAt) && (
+        <View style={s.sticky}>
+          {!!error && editing && !confirmDiscard && (
+            <Text style={s.stickyErr}>⚠️  {error}</Text>
+          )}
+
+          {confirmDiscard ? (
+            <View style={s.stickyRow}>
+              <Text style={[s.stickyTxt,{flex:1}]}>
+                You changed this but haven't saved it.
+              </Text>
+              <TouchableOpacity style={s.keepBtn} onPress={()=>{
+                leavingScreen.current = false; setConfirm(null);
+              }}>
+                <Text style={s.keepTxt}>Keep editing</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.discardBtn} onPress={discardNow}>
+                <Text style={s.discardTxt}>Discard</Text>
+              </TouchableOpacity>
+            </View>
+          ) : savedAt && !dirty ? (
+            <Text style={s.stickySaved}>✓  Saved at {savedAt}</Text>
+          ) : (
+            <View style={s.stickyRow}>
+              <Text style={[s.stickyTxt,{flex:1}]}>Unsaved changes</Text>
+              <TouchableOpacity style={[s.stickySave, saving&&s.dis]} disabled={saving}
+                onPress={()=>{
+                  const t = types.find(x => x.id === editing);
+                  if (t) saveOne(t);
+                }}>
+                {saving ? <ActivityIndicator color={C.white} size="small"/>
+                  : <Text style={s.stickySaveTxt}>Save changes</Text>}
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -451,6 +637,13 @@ const s = StyleSheet.create({
     borderRadius:10,borderWidth:1.5,borderColor:C.border,paddingLeft:10,width:104},
   optCurrency:{fontSize:13,color:C.muted,fontWeight:'700'},
   optInput:{flex:1,paddingVertical:9,paddingHorizontal:6,fontSize:14,color:C.text},
+  bindCard:{flex:1,padding:12,borderRadius:12,borderWidth:1.5,borderColor:C.border,
+    backgroundColor:C.bg},
+  bindCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt},
+  bindLbl:{fontSize:13,fontWeight:'800',color:C.muted},
+  bindLblOn:{color:C.primary},
+  bindDesc:{fontSize:11,color:C.muted,marginTop:4,lineHeight:15},
+
   previewBox:{backgroundColor:C.greenLt,borderRadius:11,padding:12,gap:6,marginTop:14,
     borderWidth:1,borderColor:'#A7F3D0'},
   previewRow:{flexDirection:'row',justifyContent:'space-between'},
@@ -466,6 +659,23 @@ const s = StyleSheet.create({
     alignItems:'center'},
   saveTxt:{fontSize:13,fontWeight:'700',color:C.white},
   dis:{opacity:0.5},
+
+  sticky:{position:'absolute',left:0,right:0,bottom:0,backgroundColor:C.white,
+    borderTopWidth:1,borderTopColor:C.border,paddingHorizontal:20,paddingTop:12,
+    paddingBottom:22,gap:10,...S.md},
+  stickyRow:{flexDirection:'row',alignItems:'center',gap:10},
+  stickyTxt:{fontSize:13,fontWeight:'700',color:C.amber},
+  stickyErr:{fontSize:12,color:C.red,fontWeight:'600',lineHeight:17},
+  stickySaved:{fontSize:13,fontWeight:'700',color:C.green,textAlign:'center'},
+  stickySave:{backgroundColor:C.primary,borderRadius:11,paddingVertical:12,
+    paddingHorizontal:20,alignItems:'center',minWidth:132},
+  stickySaveTxt:{fontSize:13,fontWeight:'700',color:C.white},
+  keepBtn:{borderWidth:1.5,borderColor:C.border,borderRadius:11,paddingVertical:11,
+    paddingHorizontal:14,backgroundColor:C.white},
+  keepTxt:{fontSize:12,fontWeight:'700',color:C.text},
+  discardBtn:{borderWidth:1.5,borderColor:C.red,borderRadius:11,paddingVertical:11,
+    paddingHorizontal:14,backgroundColor:C.white},
+  discardTxt:{fontSize:12,fontWeight:'700',color:C.red},
 
   errBox:{backgroundColor:C.redLt,borderRadius:12,padding:13,marginBottom:14,
     borderWidth:1,borderColor:'#FECACA'},
