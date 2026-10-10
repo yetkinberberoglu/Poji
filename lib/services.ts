@@ -101,6 +101,11 @@ export type ProviderService = {
   provider_id: string;
   service_type_id: string;
   active: boolean;
+  /** Per service, because an hour of a chef is not an hour of a cleaner.
+      Null falls back to the rate on their profile; null in both places
+      means the service is not bookable until they set one. */
+  hourly_rate?: number | null;
+  min_hours?: number | null;
   labour_price: number | null;
   parts_price: number | null;
   parts_label: string | null;
@@ -507,6 +512,9 @@ export async function loadServicePrices(serviceTypeId: string) {
 export function effectiveService(
   type: ServiceType,
   own?: ProviderService | null,
+  /** The provider's account-wide figures, used where they have not
+      priced this particular service. */
+  fallback?: { hourlyRate?: number | null; minHours?: number | null } | null,
 ): {
   labour: number; parts: number; partsLabel: string | null;
   minutes: number; priceMin: number | null; priceMax: number | null;
@@ -516,12 +524,21 @@ export function effectiveService(
   routePrices: Record<string, number>;
   unitLabel: string; unitPrice: number; minCharge: number; unitBinding: boolean;
   labourCommission: number;
+  hourlyRate: number; minHours: number; ownRate: boolean; multiplier: number;
   custom: boolean;
 } {
   const num = (a: any, b: any) => {
     const v = a ?? b;
     return v == null ? 0 : Number(v);
   };
+
+  /* Their rate for this service, then the one on their profile, then
+     nothing. There is deliberately no platform default: a rate nobody
+     chose is a number the provider never agreed to be paid. A zero here
+     means the caller must treat the service as not bookable. */
+  const ownRate = Number(own?.hourly_rate) || 0;
+  const rate    = ownRate || Number(fallback?.hourlyRate) || 0;
+
   return {
     optionPrices: (own?.option_prices || null) as Record<string, number> | null,
     // a provider's own list wins outright — their stages, their brands
@@ -545,6 +562,14 @@ export function effectiveService(
     unitBinding: own?.unit_binding != null
                  ? !!own.unit_binding
                  : !!type.unit_binding,
+    hourlyRate: rate,
+    ownRate:    ownRate > 0,
+    minHours:   Number(own?.min_hours) || Number(fallback?.minHours)
+                || Number(type.min_hours) || 0,
+    /* The multiplier lifts a general rate for harder work. A provider
+       who priced this service themselves has already accounted for it,
+       so applying it again would charge for the same thing twice. */
+    multiplier: ownRate > 0 ? 1 : Number(type.multiplier ?? 1) || 1,
     custom:     !!own,
   };
 }

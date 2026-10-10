@@ -17,6 +17,18 @@ type Trade = {
   id: string; category_id: string; name: string; icon: string;
   description: string; pricing: string; roadside: boolean; live: boolean;
   sort_order: number; active: boolean;
+  requires_proof: boolean; proof_label: string;
+};
+
+type Req = {
+  provider_id: string; first_name: string; last_name: string;
+  verification_status: string;
+  trade_id: string; trade_name: string; icon: string;
+  requires_proof: boolean; proof_label: string | null;
+  documents: string[] | null;
+  status: string; requested_at: string; note: string | null;
+  reason: { years?: string; letter?: string } | null;
+  held_trades: string[] | null;
 };
 
 type Usage = { services: number; providers: number; bookings: number };
@@ -45,6 +57,35 @@ export default function AdminTrades() {
   const [editTrade, setEditTrade] = useState<Partial<Trade>|null>(null);
   const [isNew, setIsNew]         = useState(false);
 
+  /* Providers asking for a trade. A trade used to be a tick box on their
+     own profile, which meant a tiler could become a chef in one tap. Now
+     they ask and this is where it is answered. */
+  const [reqs, setReqs]         = useState<Req[]>([]);
+  const [reqBusy, setReqBusy]   = useState<string|null>(null);
+  const [rejectFor, setReject]  = useState<string|null>(null);
+  const [rejectWhy, setWhy]     = useState('');
+
+  const loadReqs = async () => {
+    const { data, error: e } = await supabase.rpc('trade_requests', { p_status: 'pending' });
+    if (e) { setError(e.message); return; }
+    setReqs((data || []) as Req[]);
+  };
+
+  const decide = async (r: Req, approve: boolean, note?: string) => {
+    const key = `${r.provider_id}:${r.trade_id}`;
+    setReqBusy(key); setError('');
+    const { error: e } = await supabase.rpc('decide_trade', {
+      p_provider: r.provider_id,
+      p_trade:    r.trade_id,
+      p_approve:  approve,
+      p_note:     note || null,
+    });
+    setReqBusy(null);
+    if (e) { setError(e.message); return; }
+    setReject(null); setWhy('');
+    await loadReqs();
+  };
+
   const load = async () => {
     const [c, t] = await Promise.all([
       supabase.from('trade_categories').select('*').order('sort_order'),
@@ -57,7 +98,7 @@ export default function AdminTrades() {
     setLoad(false);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadReqs(); }, []);
 
   const checkUsage = async (id: string) => {
     const { data } = await supabase.rpc('trade_usage', { p_trade: id });
@@ -105,6 +146,8 @@ export default function AdminTrades() {
       pricing: editTrade.pricing === 'fixed' ? 'fixed' : 'hourly',
       roadside: !!editTrade.roadside,
       live: !!editTrade.live,
+      requires_proof: !!editTrade.requires_proof,
+      proof_label: (editTrade.proof_label || '').trim() || null,
       sort_order: Number(editTrade.sort_order) || 99,
       active: editTrade.active !== false,
       updated_at: new Date().toISOString(),
@@ -184,6 +227,114 @@ export default function AdminTrades() {
             </TouchableOpacity>
           </View>
         ) : null}
+
+        {/* ── who is asking for a trade ── */}
+        {reqs.length > 0 && (
+          <View style={s.queue}>
+            <Text style={s.queueTitle}>
+              ⏳  {reqs.length === 1 ? 'One provider is waiting'
+                                     : `${reqs.length} providers are waiting`}
+            </Text>
+            <Text style={s.queueHint}>
+              Approving puts the trade on their profile and starts sending them
+              jobs in it. Rejecting tells them why.
+            </Text>
+
+            {reqs.map(r=>{
+              const key  = `${r.provider_id}:${r.trade_id}`;
+              const busyR = reqBusy === key;
+              const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || 'Provider';
+              const docs = r.documents?.length || 0;
+              return (
+                <View key={key} style={s.reqCard}>
+                  <Text style={s.reqWho}>{name}</Text>
+                  <Text style={s.reqWhat}>
+                    {r.icon}  {r.trade_name}
+                    {'  ·  '}
+                    {new Date(r.requested_at).toLocaleDateString('en-GB',
+                      {day:'numeric', month:'short'})}
+                    {r.reason?.years ? `  ·  ${r.reason.years}` : ''}
+                  </Text>
+
+                  {/* What they already do. A plumber asking to be a chef
+                      should read as exactly that. */}
+                  {!!r.held_trades?.length && (
+                    <Text style={s.reqHolds}>
+                      Already approved for: {r.held_trades
+                        .map(id => trades.find(t=>t.id===id)?.name || id)
+                        .join(', ')}
+                    </Text>
+                  )}
+
+                  {r.reason?.letter ? (
+                    <View style={s.letterBox}>
+                      <Text style={s.letterTxt}>{r.reason.letter}</Text>
+                    </View>
+                  ) : (
+                    <View style={s.reqWarn}>
+                      <Text style={s.reqWarnTxt}>
+                        No letter on this request — it predates us asking for one.
+                      </Text>
+                    </View>
+                  )}
+
+                  {r.verification_status !== 'approved' && (
+                    <View style={s.reqWarn}>
+                      <Text style={s.reqWarnTxt}>
+                        ⚠️  This account is not verified yet ({r.verification_status
+                          || 'basic'}). Granting a trade will not let them take jobs
+                        until it is.
+                      </Text>
+                    </View>
+                  )}
+
+                  {r.requires_proof && (
+                    <View style={docs ? s.reqProofOk : s.reqWarn}>
+                      <Text style={docs ? s.reqProofOkTxt : s.reqWarnTxt}>
+                        📄  Needs {r.proof_label || 'proof of qualification'} —
+                        {docs ? ` ${docs} file${docs>1?'s':''} attached`
+                              : ' nothing attached yet'}
+                      </Text>
+                    </View>
+                  )}
+
+                  {rejectFor === key ? (
+                    <View style={s.rejBox}>
+                      <Text style={s.lbl}>Why not</Text>
+                      <TextInput style={s.input} value={rejectWhy}
+                        onChangeText={setWhy} multiline
+                        placeholder="They see this, so make it something they can act on"
+                        placeholderTextColor={C.muted} />
+                      <View style={s.reqBtns}>
+                        <TouchableOpacity style={s.cancelBtn}
+                          onPress={()=>{setReject(null);setWhy('');}}>
+                          <Text style={s.cancelTxt}>Back</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[s.rejBtn, busyR&&s.dis]}
+                          disabled={busyR || !rejectWhy.trim()}
+                          onPress={()=>decide(r, false, rejectWhy.trim())}>
+                          <Text style={s.rejTxt}>Send rejection</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={s.reqBtns}>
+                      <TouchableOpacity style={[s.rejBtn, busyR&&s.dis]}
+                        disabled={busyR} onPress={()=>{setReject(key);setWhy('');}}>
+                        <Text style={s.rejTxt}>Reject</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[s.okBtn, busyR&&s.dis]}
+                        disabled={busyR} onPress={()=>decide(r, true)}>
+                        {busyR ? <ActivityIndicator color={C.white} size="small"/>
+                          : <Text style={s.okTxt}>Approve</Text>}
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         {/* ── category form ── */}
         {editCat ? (
@@ -352,6 +503,34 @@ export default function AdminTrades() {
                 trackColor={{false:C.border, true:C.green}} thumbColor={C.white}/>
             </View>
 
+            <View style={s.switchRow}>
+              <View style={{flex:1}}>
+                <Text style={s.switchLbl}>Needs proof</Text>
+                <Text style={s.note}>
+                  A provider cannot be granted this trade without a document.
+                  Whether a trade is licensed in Malta is a legal question — check
+                  it rather than assuming.
+                </Text>
+              </View>
+              <Switch value={!!editTrade.requires_proof}
+                onValueChange={v=>setEditTrade(t=>({...t, requires_proof:v}))}
+                trackColor={{false:C.border, true:C.red}} thumbColor={C.white}/>
+            </View>
+
+            {!!editTrade.requires_proof && (
+              <>
+                <Text style={s.lbl}>What they need to show</Text>
+                <TextInput style={s.input} value={editTrade.proof_label || ''}
+                  onChangeText={v=>setEditTrade(t=>({...t, proof_label:v}))}
+                  placeholder="a food handling certificate"
+                  placeholderTextColor={C.muted} />
+                <Text style={s.note}>
+                  This sentence is shown to the provider when they ask for the
+                  trade, so write it as the thing they need to find.
+                </Text>
+              </>
+            )}
+
             <View style={s.formBtns}>
               <TouchableOpacity style={s.cancelBtn} onPress={()=>{setEditTrade(null);setError('');}}>
                 <Text style={s.cancelTxt}>Cancel</Text>
@@ -502,6 +681,33 @@ const s = StyleSheet.create({
     alignItems:'center'},
   saveTxt:{fontSize:13,fontWeight:'700',color:C.white},
   dis:{opacity:0.5},
+
+  queue:{backgroundColor:C.amberLt,borderRadius:16,padding:14,marginBottom:18,
+    gap:8,borderWidth:1.5,borderColor:'#FDE68A'},
+  queueTitle:{fontSize:15,fontWeight:'800',color:C.amber},
+  queueHint:{fontSize:12,color:C.text,lineHeight:17},
+  reqCard:{backgroundColor:C.white,borderRadius:12,padding:12,gap:6,
+    borderWidth:1,borderColor:C.border},
+  reqWho:{fontSize:14,fontWeight:'800',color:C.dark},
+  reqWhat:{fontSize:12,color:C.muted},
+  reqHolds:{fontSize:11,color:C.primary,fontWeight:'700'},
+  letterBox:{backgroundColor:C.bg,borderRadius:10,padding:11,
+    borderWidth:1,borderColor:C.border},
+  letterTxt:{fontSize:13,color:C.text,lineHeight:19},
+  reqWarn:{backgroundColor:C.redLt,borderRadius:9,padding:9,
+    borderWidth:1,borderColor:'#FECACA'},
+  reqWarnTxt:{fontSize:11,color:C.red,lineHeight:16,fontWeight:'600'},
+  reqProofOk:{backgroundColor:C.greenLt,borderRadius:9,padding:9,
+    borderWidth:1,borderColor:'#A7F3D0'},
+  reqProofOkTxt:{fontSize:11,color:C.green,lineHeight:16,fontWeight:'600'},
+  reqBtns:{flexDirection:'row',gap:9,marginTop:4},
+  rejBox:{gap:4,marginTop:4},
+  rejBtn:{flex:1,borderWidth:1.5,borderColor:C.red,borderRadius:11,
+    paddingVertical:11,alignItems:'center',backgroundColor:C.white},
+  rejTxt:{fontSize:13,fontWeight:'700',color:C.red},
+  okBtn:{flex:1.3,backgroundColor:C.green,borderRadius:11,paddingVertical:11,
+    alignItems:'center'},
+  okTxt:{fontSize:13,fontWeight:'700',color:C.white},
 
   errBox:{flexDirection:'row',alignItems:'flex-start',gap:10,backgroundColor:C.amberLt,
     borderRadius:12,padding:13,marginBottom:16,borderWidth:1,borderColor:'#FDE68A'},

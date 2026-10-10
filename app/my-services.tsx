@@ -45,16 +45,30 @@ export default function MyServices() {
   const [confirmDiscard, setConfirm] = useState<null | { next?: ServiceType }>(null);
   const [savedAt, setSavedAt] = useState('');
 
+  /**
+   * The figures on their profile, used for any hourly service they have
+   * not priced on its own. An hour of a chef is not an hour of a
+   * cleaner, so the rate belongs on the service — but a cleaner with
+   * three cleaning services should not have to type the same number
+   * three times either.
+   */
+  const [prof, setProf] = useState<{ hourlyRate: number; minHours: number }>(
+    { hourlyRate: 0, minHours: 0 });
+
   const dirty = !!editing && JSON.stringify(draft) !== baseline;
 
   const load = async () => {
     const { data:{ user } } = await supabase.auth.getUser();
     if (!user) { router.replace('/auth'); return; }
 
-    const { data: prof } = await supabase.from('cleaner_profiles')
-      .select('categories').eq('id', user.id).maybeSingle();
-    const cats = prof?.categories || [];
+    const { data: me } = await supabase.from('cleaner_profiles')
+      .select('categories, hourly_rate, min_hours').eq('id', user.id).maybeSingle();
+    const cats = me?.categories || [];
     setTrades(cats);
+    setProf({
+      hourlyRate: Number(me?.hourly_rate) || 0,
+      minHours:   Number(me?.min_hours)   || 0,
+    });
 
     if (cats.length) {
       await seedProviderServices(user.id, cats);
@@ -84,8 +98,13 @@ export default function MyServices() {
 
   const startEdit = (t: ServiceType) => {
     const own = mine[t.id];
-    const eff = effectiveService(t, own);
+    const eff = effectiveService(t, own, prof);
     const fresh = {
+      /* only their own figure, never the profile fallback - showing the
+         fallback here would make them think they had set a rate for this
+         service when they had not */
+      hourly_rate: own?.hourly_rate ? String(own.hourly_rate) : '',
+      min_hours:   own?.min_hours   ? String(own.min_hours)   : '',
       labour_price: String(eff.labour || ''),
       parts_price:  String(eff.parts || ''),
       parts_label:  eff.partsLabel || '',
@@ -141,6 +160,15 @@ export default function MyServices() {
       if (!Number(draft.unit_price)) { setError('Set your price per ' + (t.unit_label || 'm²')); return; }
     } else if (t.pricing_model === 'fixed') {
       if (!Number(draft.labour_price)) { setError('Set your service charge'); return; }
+    } else if ((t.pricing_model ?? 'hourly') === 'hourly') {
+      /* Their rate here, or the one on their profile. One of the two has
+         to exist: a rate nobody chose is a number they never agreed to
+         be paid, and the database refuses the booking rather than
+         inventing one. */
+      if (!Number(draft.hourly_rate) && !prof.hourlyRate) {
+        setError('Set your hourly rate for this work — there is none on your profile to fall back on');
+        return;
+      }
     }
 
     setSaving(true);
@@ -158,6 +186,10 @@ export default function MyServices() {
       price_min:    isQuote ? Number(draft.price_min) : null,
       price_max:    isQuote ? Number(draft.price_max) : null,
       typical_minutes: Number(draft.typical_minutes) || 60,
+      /* null, not 0 - null means "use my profile rate", 0 would mean
+         "I work for nothing" */
+      hourly_rate:  Number(draft.hourly_rate) || null,
+      min_hours:    Number(draft.min_hours)   || null,
       unit_price:   Number(draft.unit_price) || null,
       min_charge:   Number(draft.min_charge) || null,
       unit_binding: draft.unit_binding === true,
@@ -249,7 +281,7 @@ export default function MyServices() {
               {list.map(t=>{
                 const own = mine[t.id];
                 const on  = own?.active !== false;
-                const eff = effectiveService(t, own);
+                const eff = effectiveService(t, own, prof);
                 const isQuote = t.pricing_model === 'quote';
                 const isUnit  = t.pricing_model === 'unit';
                 const isHourly= (t.pricing_model ?? 'hourly') === 'hourly';
@@ -279,7 +311,11 @@ export default function MyServices() {
                                     + (eff.minCharge ? ` · min €${eff.minCharge}` : '')
                                     + (eff.unitBinding ? ' · fixed' : ' · estimate')
                                   : `Set your price per ${eff.unitLabel}`)
-                              : isHourly ? 'Charged at your hourly rate'
+                              : isHourly ? (eff.hourlyRate
+                                  ? `€${eff.hourlyRate}/hr`
+                                    + (eff.ownRate ? '' : ' · from your profile')
+                                    + (eff.minHours ? ` · min ${eff.minHours}h` : '')
+                                  : 'Set your hourly rate — clients cannot book this yet')
                               : isQuote ? (eff.priceMin && eff.priceMax
                                   ? `€${eff.priceMin} – €${eff.priceMax} · you quote after talking`
                                   : 'Set your range')
@@ -313,9 +349,16 @@ export default function MyServices() {
                       />
                     </View>
 
-                    {on && !isHourly && !open && (
+                    {/* Hourly services had no edit button at all, which is why
+                        one rate on the profile had to cover every trade. */}
+                    {on && !open && (
                       <TouchableOpacity style={s.editBtn} onPress={()=>leaveEdit(t)}>
-                        <Text style={s.editTxt}>Change my price ›</Text>
+                        <Text style={[s.editTxt,
+                          isHourly && !eff.hourlyRate && {color:C.red}]}>
+                          {isHourly && !eff.hourlyRate
+                            ? 'Set your rate ›'
+                            : 'Change my price ›'}
+                        </Text>
                       </TouchableOpacity>
                     )}
 
@@ -428,6 +471,75 @@ export default function MyServices() {
                               </View>
                             </View>
                           </>
+                        ) : isHourly ? (
+                          <>
+                            <Text style={s.formHint}>
+                              This work is charged by time. The rate is per service,
+                              not per account — an hour cooking is not an hour
+                              cleaning, and nobody should have to charge the same
+                              for both.
+                            </Text>
+
+                            <Text style={s.lbl}>Your rate for this work (€/hour)</Text>
+                            <TextInput style={s.input} value={draft.hourly_rate}
+                              onChangeText={(v)=>setDraft((d:any)=>({...d, hourly_rate:v.replace(/[^0-9.]/g,'')}))}
+                              keyboardType="decimal-pad"
+                              placeholder={prof.hourlyRate ? String(prof.hourlyRate) : '15'}
+                              placeholderTextColor={C.muted} />
+                            <Text style={s.note}>
+                              {prof.hourlyRate
+                                ? `Leave it empty and we use the €${prof.hourlyRate}/hr from your profile.`
+                                : 'There is no rate on your profile either, so this one is required — without it clients cannot book this service.'}
+                            </Text>
+
+                            <Text style={s.lbl}>Minimum hours for this job</Text>
+                            <View style={s.pillWrap}>
+                              {[1,1.5,2,2.5,3,4].map(h=>(
+                                <TouchableOpacity key={h}
+                                  style={[s.pill, Number(draft.min_hours)===h&&s.pillOn]}
+                                  onPress={()=>setDraft((d:any)=>({...d,
+                                    min_hours: Number(draft.min_hours)===h ? '' : String(h)}))}>
+                                  <Text style={[s.pillTxt, Number(draft.min_hours)===h&&s.pillTxtOn]}>
+                                    {h}h
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                            <Text style={s.note}>
+                              {prof.minHours
+                                ? `Tap the same one again to clear it and fall back to the ${prof.minHours}h on your profile.`
+                                : 'Nobody crosses the island for forty minutes of work. This is the shortest job you would take.'}
+                            </Text>
+
+                            {Number(draft.hourly_rate || prof.hourlyRate) > 0 && (() => {
+                              const r = Number(draft.hourly_rate) || prof.hourlyRate;
+                              const hrs = Number(draft.min_hours) || prof.minHours || 2;
+                              /* mirrors poji_settle_hourly: nothing on top of the
+                                 rate, card fee on the total, 20% off the labour */
+                              const exVat  = +(r * hrs).toFixed(2);
+                              const stripe = +(exVat * 0.029 + 0.30).toFixed(2);
+                              return (
+                                <View style={s.previewBox}>
+                                  <View style={s.previewRow}>
+                                    <Text style={s.previewLbl}>
+                                      A {hrs}h job — client pays
+                                    </Text>
+                                    <Text style={s.previewVal}>€{(exVat + stripe).toFixed(2)}</Text>
+                                  </View>
+                                  <View style={s.previewRow}>
+                                    <Text style={s.previewLbl}>You keep</Text>
+                                    <Text style={[s.previewVal,{color:C.green,fontWeight:'800'}]}>
+                                      €{(exVat * 0.80).toFixed(2)}
+                                    </Text>
+                                  </View>
+                                  <Text style={s.previewNote}>
+                                    20% on the work. Longer jobs bill the real time, to
+                                    the nearest quarter hour.
+                                  </Text>
+                                </View>
+                              );
+                            })()}
+                          </>
                         ) : (
                           <>
                             <Text style={s.lbl}>Your service charge (€)</Text>
@@ -493,7 +605,7 @@ export default function MyServices() {
                           placeholder="I use Aquafilter cartridges and test the TDS before I leave"
                           placeholderTextColor={C.muted} multiline textAlignVertical="top" />
 
-                        {!isQuote && Number(draft.labour_price) > 0 && (() => {
+                        {!isQuote && !isHourly && Number(draft.labour_price) > 0 && (() => {
                           const preview = fixedQuote({
                             labourPrice: Number(draft.labour_price),
                             partsPrice: Number(draft.parts_price) || 0,

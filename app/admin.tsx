@@ -348,11 +348,7 @@ export default function Admin() {
           <Text style={st.heading}>Admin Panel</Text>
           <Text style={st.sub}>Poji Malta</Text>
         </View>
-        <TouchableOpacity
-          style={{backgroundColor:C.primary, paddingHorizontal:14, paddingVertical:9, borderRadius:10, marginRight:8}}
-          onPress={()=>router.push('/admin-trades')}>
-          <Text style={{color:'#fff', fontWeight:'700', fontSize:13}}>Trades</Text>
-        </TouchableOpacity>
+        <TradesButton />
         <TouchableOpacity style={st.signOutBtn} onPress={signOut}>
           <Text style={st.signOutTxt}>Sign Out</Text>
         </TouchableOpacity>
@@ -1168,3 +1164,40 @@ const st = StyleSheet.create({
   primaryBtn:{backgroundColor:C.primary,borderRadius:16,paddingVertical:15,paddingHorizontal:34,marginTop:10},
   primaryTxt:{color:C.white,fontSize:15,fontWeight:'700'},
 });
+
+/**
+ * Trades, with a count of providers waiting on one. The queue itself lives
+ * on the trades screen; this badge is so nobody has to go looking for it.
+ */
+function TradesButton() {
+  const [waiting, setWaiting] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    const count = async () => {
+      const { data, error } = await supabase.rpc('trade_requests', { p_status: 'pending' });
+      if (!live) return;
+      if (error) { console.log('trade_requests:', error.message); return; }
+      setWaiting((data || []).length);
+    };
+    count();
+    const t = setInterval(count, 60000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
+
+  return (
+    <TouchableOpacity
+      style={{backgroundColor:C.primary, paddingHorizontal:14, paddingVertical:9,
+              borderRadius:10, marginRight:8, flexDirection:'row',
+              alignItems:'center', gap:7}}
+      onPress={()=>router.push('/admin-trades')}>
+      <Text style={{color:'#fff', fontWeight:'700', fontSize:13}}>Trades</Text>
+      {waiting > 0 && (
+        <View style={{backgroundColor:'#fff', minWidth:18, height:18, borderRadius:9,
+                      alignItems:'center', justifyContent:'center', paddingHorizontal:5}}>
+          <Text style={{color:C.primary, fontSize:11, fontWeight:'800'}}>{waiting}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}

@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { C, S } from '../../constants/theme';
-import { useApp } from '../../context/AppContext';
+import { useApp, providerEarnings } from '../../context/AppContext';
 import { fmtDuration } from '../../lib/services';
 import PlatformFeedback from '../../components/PlatformFeedback';
 
@@ -55,11 +55,8 @@ export default function Earnings() {
 
     const pending = bookings.filter(b => b.status === 'awaiting_confirmation');
 
-    const earned = paid.reduce((s,b) =>
-      s + Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)), 0);
-
-    const waiting = pending.reduce((s,b) =>
-      s + Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)), 0);
+    const earned  = paid.reduce((s,b) => s + providerEarnings(b), 0);
+    const waiting = pending.reduce((s,b) => s + providerEarnings(b), 0);
 
     const minutes = paid.reduce((s,b) => s + Number(b.actualMinutes ?? (b.hours*60)), 0);
     const hourly  = minutes > 0 ? earned / (minutes/60) : 0;
@@ -139,8 +136,16 @@ export default function Earnings() {
       <View style={s.infoBox}>
         <Text style={s.infoTitle}>How payouts work</Text>
         <Text style={s.infoTxt}>
-          You keep 80% of each job before VAT. Poji issues the VAT invoice on your
-          behalf and pays you after the client approves the work.
+          Your price is what the client pays — Poji adds nothing on top. The
+          commission comes out of your side: 20% of the labour on most work, 10%
+          on larger construction jobs, and 5% on parts you supply. The rate is
+          fixed the moment you accept a job, so a later change cannot touch work
+          already agreed. You're paid once the client approves, or automatically
+          six hours after you mark the job done.
+        </Text>
+        <Text style={[s.infoTxt,{marginTop:8}]}>
+          Whether you charge VAT within your price is between you and your
+          accountant — Poji does not handle your VAT for you.
         </Text>
       </View>
 
@@ -159,7 +164,7 @@ export default function Earnings() {
           </Text>
         </View>
       ) : history.map(b=>{
-        const pay = Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80));
+        const pay = providerEarnings(b);
         const waiting = b.status === 'awaiting_confirmation';
         return (
           <View key={b.id} style={s.row}>

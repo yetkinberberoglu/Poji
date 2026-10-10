@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, RefreshControl, TextInput } from 'react-native';
 import { C, S } from '../../constants/theme';
-import { useApp } from '../../context/AppContext';
+import { useApp, providerEarnings } from '../../context/AppContext';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { findTrade } from '../../constants/trades';
@@ -306,7 +306,7 @@ export default function ProviderScreen() {
     .sort((a,b) => (b.isUrgent ? 1 : 0) - (a.isUrgent ? 1 : 0));
   const done   = bookings.filter(b => ['cancelled','completed','disputed'].includes(b.status));
   const earned = done.filter(b => b.status==='completed')
-    .reduce((s,b) => s + Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)), 0);
+    .reduce((s,b) => s + providerEarnings(b), 0);
 
   return (
     <ScrollView style={s0.wrap} showsVerticalScrollIndicator={false}
@@ -453,7 +453,7 @@ export default function ProviderScreen() {
 
       {active.map(b => {
         const st  = STATUS[b.status] || STATUS.pending;
-        const pay = (b.total/1.029/1.18*0.80).toFixed(2);
+        const pay = providerEarnings(b).toFixed(2);
         const isBusy = busy === b.id;
 
         return (
@@ -775,7 +775,9 @@ export default function ProviderScreen() {
                       const rate = (Number(b.hourlyRate)||15) * (Number(b.serviceMultiplier)||1)
                                  + (b.suppliesBy === 'cleaner' ? 2 : 0);
                       const billed = Math.ceil(mins/15)*15;
-                      const earning = (billed/60) * rate * (b.numWorkers||1) * 0.80;
+                      /* the rate frozen onto this booking, not a flat 20% */
+                      const keep = 1 - Number(b.commissionRate ?? 0.20);
+                      const earning = (billed/60) * rate * (b.numWorkers||1) * keep;
                       return (
                         <View style={s0.timerBox}>
                           <View style={s0.timerRow}>
@@ -879,9 +881,9 @@ export default function ProviderScreen() {
                   {b.pricingModel !== 'hourly' && (
                     <View style={s0.settleBox}>
                       <View style={s0.settleRow}>
-                        <Text style={s0.settleLbl}>Agreed price</Text>
+                        <Text style={s0.settleLbl}>Your payment</Text>
                         <Text style={s0.settleBig}>
-                          €{(Number(b.total)/1.029/1.18*0.80).toFixed(2)}
+                          €{providerEarnings(b).toFixed(2)}
                         </Text>
                       </View>
                     </View>
@@ -900,7 +902,7 @@ export default function ProviderScreen() {
                       )}
                       <View style={s0.settleRow}>
                         <Text style={s0.settleLbl}>Your payment</Text>
-                        <Text style={s0.settleBig}>€{Number(b.finalProviderPayment||0).toFixed(2)}</Text>
+                        <Text style={s0.settleBig}>€{providerEarnings(b).toFixed(2)}</Text>
                       </View>
                     </View>
                   )}
@@ -944,7 +946,7 @@ export default function ProviderScreen() {
                     <Text style={s0.earningsKey}>{prettyDate(b.date)} · {b.hours}h</Text>
                     <Text style={s0.earningsAmt}>
                       {b.status==='completed'
-                        ? `€${Number(b.finalProviderPayment ?? (b.total/1.029/1.18*0.80)).toFixed(2)}`
+                        ? `€${providerEarnings(b).toFixed(2)}`
                         : st.label}
                     </Text>
                     <TouchableOpacity onPress={()=>hideBooking(b.id, 'provider')}>

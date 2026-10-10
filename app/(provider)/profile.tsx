@@ -70,9 +70,117 @@ export default function ProviderProfile() {
 
   const set = (k:string, v:any) => { setF((p:any)=>({...p,[k]:v})); setError(''); };
 
-  const myTrades  = f.categories.map((id:string)=>findTrade(id)).filter(Boolean);
+  /* Trades are granted, not chosen. my_trades() returns every live trade
+     with this provider's standing against it, so the panel below asks
+     rather than assigns. The database freezes cleaner_profiles.categories
+     against anything but decide_trade(), so a tick box here would have
+     looked saved and changed nothing. */
+  const [tradeRows, setTradeRows]   = useState<any[]>([]);
+  const [tradeBusy, setTradeBusy]   = useState<string|null>(null);
+  const [confirmDrop, setConfirmDrop] = useState<string|null>(null);
+
+  /* Asking for a trade means writing something. A tap was as thin as the
+     tick box it replaced, and left the admin nothing to decide from. */
+  const [askFor, setAskFor]     = useState<any>(null);
+  const [askYears, setAskYears] = useState('');
+  const [askLetter, setLetter]  = useState('');
+
+  const YEARS = ['Under a year', '1–3 years', '3–10 years', 'Over 10 years'];
+
+  const loadMyTrades = async () => {
+    const { data, error: e } = await supabase.rpc('my_trades');
+    if (e) { console.log('my_trades:', e.message); return; }
+    setTradeRows(data || []);
+  };
+
+  useEffect(() => { loadMyTrades(); }, []);
+
+  const standingOf = (id: string) =>
+    tradeRows.find(r => r.trade_id === id)?.status || 'none';
+
+  /* While my_trades is still in flight, fall back to the column so the
+     Rates and radius sections do not flicker out of existence. */
+  const approvedIds: string[] = tradeRows.length
+    ? tradeRows.filter(r => r.status === 'approved').map(r => r.trade_id)
+    : (f.categories as string[]);
+
+  const pendingCount = tradeRows.filter(r => r.status === 'pending').length;
+
+  const myTrades  = approvedIds.map((id:string)=>findTrade(id)).filter(Boolean);
   const hasHourly = myTrades.some((t:any)=>t.pricing === 'hourly');
   const hasRoad   = myTrades.some((t:any)=>t.roadside);
+
+  const callRpc = async (fn: string, args: any) => {
+    const { data, error: e } = await supabase.rpc(fn, args);
+    if (e) {
+      /* also to the console, so a message that scrolls past is still
+         findable when something goes wrong on someone else's phone */
+      console.log(`${fn} failed:`, e.message, args);
+      throw new Error(e.message);
+    }
+    return data;
+  };
+
+  const tapTrade = async (row: any) => {
+    if (row.status === 'suspended') {
+      setError('That trade is suspended on your account. Email support and we will look at it.');
+      return;
+    }
+    if (row.status === 'approved') { setConfirmDrop(row.trade_id); return; }
+
+    /* Pending is a request you can take back - one tap, nothing to write */
+    if (row.status === 'pending') {
+      setTradeBusy(row.trade_id); setError('');
+      try {
+        await callRpc('withdraw_trade', { p_trade: row.trade_id });
+        await loadMyTrades();
+      } catch (e:any) {
+        setError(e?.message || 'That did not go through');
+      }
+      setTradeBusy(null);
+      return;
+    }
+
+    /* Anything else opens the letter, with whatever they wrote last time
+       still in the box so a rejection is not back to a blank page */
+    setError('');
+    setAskFor(row);
+    setAskYears(row.reason?.years  || '');
+    setLetter(row.reason?.letter || '');
+  };
+
+  const submitRequest = async () => {
+    if (!askFor) return;
+    if (!askYears) { setError('Pick how long you have done this work'); return; }
+    if (askLetter.trim().length < 100) {
+      setError('A few more sentences — what you have done in this trade and who for');
+      return;
+    }
+
+    setTradeBusy(askFor.trade_id); setError('');
+    try {
+      await callRpc('request_trade', {
+        p_trade:  askFor.trade_id,
+        p_reason: { years: askYears, letter: askLetter.trim() },
+      });
+      await loadMyTrades();
+      setAskFor(null); setAskYears(''); setLetter('');
+    } catch (e:any) {
+      setError(e?.message || 'That did not go through');
+    }
+    setTradeBusy(null);
+  };
+
+  const dropTrade = async (id: string) => {
+    setTradeBusy(id); setError('');
+    try {
+      await callRpc('withdraw_trade', { p_trade: id });
+      await loadMyTrades();
+    } catch (e:any) {
+      setError(e?.message || 'That did not go through');
+    }
+    setTradeBusy(null); setConfirmDrop(null);
+  };
 
   useEffect(() => {
     (async () => {
@@ -295,45 +403,208 @@ export default function ProviderProfile() {
       {/* ══ TRADES ══ */}
       <Row
         icon="🛠️" title="What you do"
-        value={f.categories.length ? `${f.categories.length} trade${f.categories.length>1?'s':''}` : 'None set'}
+        value={
+          approvedIds.length
+            ? `${approvedIds.length} trade${approvedIds.length>1?'s':''}`
+              + (pendingCount ? ` · ${pendingCount} waiting` : '')
+            : pendingCount ? `${pendingCount} waiting on approval` : 'None yet'
+        }
         open={open==='trades'} onPress={()=>setOpen(open==='trades'?null:'trades')}
       />
       {open==='trades' && (
         <View style={s.panel}>
           <Text style={s.panelHint}>
-            Tick everything you're qualified for. Clients only see the trades you pick,
-            and you only get alerts for those.
+            Ask for the trades you're qualified for and we'll check them. Some need a
+            licence or certificate before we can grant them. A trade you already hold
+            can be dropped whenever you like.
           </Text>
 
+          {error && !askFor ? (
+            <View style={s.askErr}>
+              <Text style={s.askErrTxt}>⚠️  {error}</Text>
+            </View>
+          ) : null}
+
           {CATEGORIES.map(cat=>{
-            const items  = tradesIn(cat.id);
-            const chosen = items.filter(t=>f.categories.includes(t.id)).length;
+            const items = tradeRows.length
+              ? tradeRows.filter(r => r.category_id === cat.id)
+              : tradesIn(cat.id).map(t => ({
+                  trade_id: t.id, name: t.name, icon: t.icon,
+                  category_id: t.category, status: standingOf(t.id),
+                  requires_proof: false, proof_label: null, note: null,
+                }));
+            if (!items.length) return null;
+
+            const mine = items.filter((r:any)=>r.status === 'approved').length;
             return (
               <View key={cat.id} style={s.tradeGroup}>
                 <View style={s.tradeHead}>
                   <Text style={s.tradeHeadTxt}>{cat.icon}  {cat.name}</Text>
-                  {chosen>0 && (
-                    <View style={s.countPill}><Text style={s.countTxt}>{chosen}</Text></View>
+                  {mine>0 && (
+                    <View style={s.countPill}><Text style={s.countTxt}>{mine}</Text></View>
                   )}
                 </View>
                 <View style={s.pillWrap}>
-                  {items.map(t=>{
-                    const on = f.categories.includes(t.id);
+                  {items.map((r:any)=>{
+                    const busy = tradeBusy === r.trade_id;
+                    const st   = r.status;
                     return (
-                      <TouchableOpacity key={t.id} style={[s.pill, on&&s.pillOn]}
-                        onPress={()=>set('categories', on
-                          ? f.categories.filter((x:string)=>x!==t.id)
-                          : [...f.categories, t.id])}>
-                        <Text style={[s.pillTxt, on&&s.pillTxtOn]}>
-                          {on?'✓ ':''}{t.icon}  {t.name}
+                      <TouchableOpacity
+                        key={r.trade_id}
+                        disabled={busy}
+                        style={[s.pill,
+                          st==='approved'  && s.pillOn,
+                          st==='pending'   && s.pillWait,
+                          st==='rejected'  && s.pillBad,
+                          st==='suspended' && s.pillStop,
+                          busy && s.saveDis]}
+                        onPress={()=>tapTrade(r)}>
+                        <Text style={[s.pillTxt,
+                          st==='approved'  && s.pillTxtOn,
+                          st==='pending'   && {color:C.amber},
+                          st==='rejected'  && {color:C.red},
+                          st==='suspended' && {color:C.red}]}>
+                          {st==='approved'  ? '✓ ' :
+                           st==='pending'   ? '⏳ ' :
+                           st==='rejected'  ? '✕ ' :
+                           st==='suspended' ? '⛔ ' : ''}
+                          {r.icon}  {r.name}
+                          {r.requires_proof && st!=='approved' ? '  📄' : ''}
                         </Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
+
+                {items.filter((r:any)=>r.status==='rejected' && r.note).map((r:any)=>(
+                  <View key={`n-${r.trade_id}`} style={s.rejNote}>
+                    <Text style={s.rejNoteTxt}>
+                      {r.icon}  {r.name} — {r.note}
+                    </Text>
+                  </View>
+                ))}
               </View>
             );
           })}
+
+          {askFor && (
+            <View style={s.askBox}>
+              <Text style={s.askTitle}>
+                {askFor.icon}  {askFor.name}
+              </Text>
+              <Text style={s.askHint}>
+                {askFor.status === 'rejected'
+                  ? 'You can ask again. Say what has changed since last time.'
+                  : 'Tell us about your experience in this trade. A person reads this, not a machine.'}
+              </Text>
+
+              <Text style={s.lbl}>How long have you done this work?</Text>
+              <View style={s.pillWrap}>
+                {YEARS.map(y=>(
+                  <TouchableOpacity key={y} style={[s.pill, askYears===y&&s.pillOn]}
+                    onPress={()=>{setAskYears(y); setError('');}}>
+                    <Text style={[s.pillTxt, askYears===y&&s.pillTxtOn]}>{y}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={s.lbl}>Your letter</Text>
+              <TextInput
+                style={[s.input,{minHeight:140}]}
+                value={askLetter}
+                onChangeText={(t:string)=>{setLetter(t); setError('');}}
+                multiline textAlignVertical="top"
+                placeholder={
+                  'Six years doing weddings and private parties, mostly in St Julian’s '
+                  + 'and Sliema. I own my own rig — two tops, two subs, lights. I read a '
+                  + 'room rather than play a fixed set. Happy to give you two venues to ring.'
+                }
+                placeholderTextColor={C.muted} />
+              <Text style={[s.hintSmall,
+                askLetter.trim().length < 100 && {color:C.amber,fontWeight:'700'}]}>
+                {askLetter.trim().length < 100
+                  ? `${100 - askLetter.trim().length} more characters`
+                  : `${askLetter.trim().length} characters`}
+              </Text>
+
+              {askFor.requires_proof && (
+                <View style={s.proofNote}>
+                  <Text style={s.proofNoteTxt}>
+                    📄  This one also needs {askFor.proof_label || 'proof of qualification'}.
+                    Upload it under Documents and identity before you send this.
+                  </Text>
+                </View>
+              )}
+
+              {/* Next to the button that caused it. The page-level banner is
+                  at the top of a long scroll, where nobody standing on this
+                  form will ever see it. */}
+              {error ? (
+                <View style={s.askErr}>
+                  <Text style={s.askErrTxt}>⚠️  {error}</Text>
+                </View>
+              ) : null}
+
+              <View style={s.row2}>
+                <TouchableOpacity style={s.offCancel}
+                  onPress={()=>{setAskFor(null);setError('');}}>
+                  <Text style={s.offCancelTxt}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.offSave, tradeBusy===askFor.trade_id&&s.saveDis]}
+                  disabled={tradeBusy===askFor.trade_id}
+                  onPress={submitRequest}>
+                  {tradeBusy===askFor.trade_id
+                    ? <ActivityIndicator color={C.white} size="small"/>
+                    : <Text style={s.offSaveTxt}>Send for approval</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {confirmDrop && (() => {
+            const row = tradeRows.find(r=>r.trade_id===confirmDrop);
+            return (
+              <View style={s.dropBox}>
+                <Text style={s.dropTitle}>
+                  Stop offering {row?.name || 'this trade'}?
+                </Text>
+                <Text style={s.dropTxt}>
+                  You'll stop getting jobs in it and drop off the client list for it.
+                  Asking for it again later means another check.
+                </Text>
+                <View style={s.row2}>
+                  <TouchableOpacity style={s.offCancel} onPress={()=>setConfirmDrop(null)}>
+                    <Text style={s.offCancelTxt}>Keep it</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.dropBtn, tradeBusy===confirmDrop&&s.saveDis]}
+                    disabled={tradeBusy===confirmDrop}
+                    onPress={()=>dropTrade(confirmDrop)}>
+                    <Text style={s.dropBtnTxt}>Drop it</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })()}
+
+          {pendingCount > 0 && (
+            <View style={s.waitNote}>
+              <Text style={s.waitNoteTxt}>
+                ⏳  {pendingCount === 1 ? 'One trade is' : `${pendingCount} trades are`}
+                {' '}waiting on us. Usually within a working day. Tap one again to take
+                the request back.
+              </Text>
+            </View>
+          )}
+
+          {tradeRows.some(r=>r.requires_proof && r.status!=='approved') && (
+            <View style={s.proofNote}>
+              <Text style={s.proofNoteTxt}>
+                📄  A trade marked with a document needs proof of qualification. Upload
+                it under Documents and identity, then ask for the trade.
+              </Text>
+            </View>
+          )}
 
           {hasRoad && (
             <View style={s.roadBox}>
@@ -362,11 +633,15 @@ export default function ProviderProfile() {
             </View>
           )}
 
-          <SaveBtn busy={saving} onPress={()=>save({
-            categories: f.categories.length ? f.categories : ['cleaning'],
-            accepts_urgent: !!f.accepts_urgent,
-            service_radius_km: Number(f.service_radius_km) || 15,
-          })} />
+          {/* Trades save themselves the moment you ask for one, so the only
+              thing left to save here is the roadside pair. Without them the
+              button would promise something it no longer does. */}
+          {hasRoad && (
+            <SaveBtn busy={saving} onPress={()=>save({
+              accepts_urgent: !!f.accepts_urgent,
+              service_radius_km: Number(f.service_radius_km) || 15,
+            })} />
+          )}
         </View>
       )}
 
@@ -385,13 +660,16 @@ export default function ProviderProfile() {
                 onChangeText={(t:string)=>set('hourly_rate', t.replace(/[^0-9.]/g,''))}
                 keyboardType="decimal-pad" />
 
+              {/* Nothing is added on top of the rate any more. The client pays
+                  the rate plus the card fee; the commission comes off the
+                  provider's side. */}
               <View style={s.calcBox}>
                 <View style={s.calcRow}>
                   <Text style={s.calcLbl}>Client pays per hour</Text>
-                  <Text style={s.calcVal}>€{(Number(f.hourly_rate||0)*1.18).toFixed(2)}</Text>
+                  <Text style={s.calcVal}>€{(Number(f.hourly_rate||0)*1.029).toFixed(2)}</Text>
                 </View>
                 <View style={s.calcRow}>
-                  <Text style={s.calcLbl}>You keep</Text>
+                  <Text style={s.calcLbl}>You keep (after 20% commission)</Text>
                   <Text style={[s.calcVal,{color:C.green}]}>
                     €{(Number(f.hourly_rate||0)*0.8).toFixed(2)}
                   </Text>
@@ -796,6 +1074,33 @@ const s = StyleSheet.create({
   pillOn:{backgroundColor:C.primary,borderColor:C.primary},
   pillTxt:{fontSize:12,fontWeight:'600',color:C.muted},
   pillTxtOn:{color:C.white},
+  pillWait:{backgroundColor:C.amberLt,borderColor:'#FDE68A'},
+  pillBad:{backgroundColor:C.redLt,borderColor:'#FECACA'},
+  pillStop:{backgroundColor:C.redLt,borderColor:C.red,borderStyle:'dashed'},
+
+  rejNote:{backgroundColor:C.redLt,borderRadius:10,padding:10,marginTop:8,
+    borderWidth:1,borderColor:'#FECACA'},
+  rejNoteTxt:{fontSize:11,color:C.red,lineHeight:16,fontWeight:'600'},
+  waitNote:{backgroundColor:C.amberLt,borderRadius:12,padding:12,marginTop:10,
+    borderWidth:1,borderColor:'#FDE68A'},
+  waitNoteTxt:{fontSize:12,color:C.text,lineHeight:17},
+  proofNote:{backgroundColor:C.primaryLt,borderRadius:12,padding:12,marginTop:10,
+    borderWidth:1,borderColor:C.border},
+  proofNoteTxt:{fontSize:12,color:C.text,lineHeight:17},
+  askBox:{backgroundColor:C.bgAlt,borderRadius:14,padding:14,marginTop:10,
+    borderWidth:1.5,borderColor:C.primary},
+  askTitle:{fontSize:15,fontWeight:'800',color:C.dark},
+  askErr:{backgroundColor:C.redLt,borderRadius:10,padding:11,marginTop:12,
+    borderWidth:1.5,borderColor:'#FECACA'},
+  askErrTxt:{fontSize:12,color:C.red,fontWeight:'700',lineHeight:17},
+  askHint:{fontSize:12,color:C.muted,lineHeight:17,marginTop:4},
+  dropBox:{backgroundColor:C.redLt,borderRadius:14,padding:14,marginTop:10,gap:6,
+    borderWidth:1.5,borderColor:'#FECACA'},
+  dropTitle:{fontSize:14,fontWeight:'800',color:C.red},
+  dropTxt:{fontSize:12,color:C.text,lineHeight:17},
+  dropBtn:{flex:1.4,backgroundColor:C.red,borderRadius:11,paddingVertical:11,
+    alignItems:'center'},
+  dropBtnTxt:{fontSize:13,fontWeight:'700',color:C.white},
 
   checkRow:{flexDirection:'row',alignItems:'center',gap:12,padding:13,borderRadius:12,
     borderWidth:1.5,borderColor:C.border,backgroundColor:C.bg,marginTop:8},

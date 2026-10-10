@@ -54,10 +54,26 @@ export interface Booking {
   promoCode?: string | null; discount?: number | null;
   noShow?: boolean | null;
   labourTotal?: number | null;
+  /* What the booking was priced at when it was made. Written by the
+     price_new_booking() trigger, never by this app. */
+  providerPayment?: number | null;
+  platformCommission?: number | null;
+  commissionRate?: number | null;
   quoteAmount?: number | null;
   quoteParts?: number | null;
   quoteNote?: string | null;
 }
+
+/**
+ * What the provider will be paid. There is nothing to work out here: the
+ * database writes provider_payment when the booking is made and
+ * final_provider_payment when the job settles, so this only chooses
+ * between the two. The old code multiplied the client's total by 0.80
+ * after dividing out an 18% VAT that no longer exists, which came out
+ * roughly 15% short and was shown to the provider as their earnings.
+ */
+export const providerEarnings = (b: Partial<Booking> | null | undefined) =>
+  Number(b?.finalProviderPayment ?? b?.providerPayment ?? 0);
 
 export type Cleaner = {
   id: string; name: string; initials: string; color: string;
@@ -309,6 +325,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         noShow: b.no_show,
         discount: b.discount,
         labourTotal: b.labour_total,
+        providerPayment: b.provider_payment,
+        platformCommission: b.platform_commission,
+        commissionRate: b.commission_rate,
         quoteAmount: b.quote_amount,
         quoteParts: b.quote_parts,
         quoteNote: b.quote_note,
@@ -402,7 +421,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { console.log('addBooking: no user'); return; }
 
-    const exVat = b.total / 1.029 / 1.18;
+    /* No money is worked out here. The price_new_booking() trigger reads
+       labour_total, parts_total, the urgency flag and the service's own
+       commission rate, and writes price_ex_vat, vat_amount, stripe_fee,
+       total_price, provider_payment, platform_commission and
+       commission_rate itself. Anything this app sent for those columns
+       was overwritten anyway, and what it used to send was wrong: a
+       hardcoded 18% VAT and a flat 20% commission. */
     const { data, error } = await supabase.from('bookings').insert({
       client_id: user.id,
       provider_id: b.providerId || null,
@@ -413,13 +438,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       num_workers: b.numWorkers,
       property_type: b.propertyType,
       service_type: b.serviceType,
-      price_ex_vat: +exVat.toFixed(2),
-      vat_amount: +(exVat * 0.18).toFixed(2),
-      stripe_fee: +(b.total - b.total / 1.029).toFixed(2),
       total_price: b.total,
-      estimated_total: b.total,
-      provider_payment: +(exVat * 0.80).toFixed(2),
-      platform_commission: +(exVat * 0.20).toFixed(2),
       status: 'pending',
       service_multiplier: meta?.multiplier ?? 1,
       extras_total: 0,
@@ -483,7 +502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         matchingProviders({ tradeId: meta?.tradeId, date: b.date, time: b.time })
           .then(list => list.forEach(c => notify(c.id, 'job_in_pool', {
             address: b.address, date: b.date, time: b.time, hours: b.hours,
-            earnings: (b.total / 1.029 / 1.18 * 0.80),
+            earnings: Number(data.provider_payment ?? 0),
           }, data.id)));
       } else
       // Tell the preferred cleaner they have a 5-minute priority window
@@ -495,7 +514,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         model: meta?.pricingModel || 'hourly',
         earnings: meta?.pricingModel === 'quote'
           ? null
-          : (b.total / 1.029 / 1.18 * 0.80),
+          : Number(data.provider_payment ?? 0),
       }, data.id);
 
       setBookings(prev => [{
@@ -507,6 +526,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         preferredProviderId: data.preferred_provider_id,
         preferredUntil: data.preferred_until,
         releasedToPool: data.released_to_pool,
+        /* straight from the row the trigger just priced, so the list
+           shows the same figure the database holds */
+        labourTotal: data.labour_total,
+        partsTotal: data.parts_total,
+        providerPayment: data.provider_payment,
+        platformCommission: data.platform_commission,
+        commissionRate: data.commission_rate,
+        pricingModel: data.pricing_model,
+        isUrgent: data.is_urgent,
       }, ...prev]);
     }
   };
@@ -537,7 +565,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       pool.forEach(c => notify(c.id, 'job_in_pool', {
         address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
-        earnings: (bk.total / 1.029 / 1.18 * 0.80),
+        earnings: providerEarnings(bk),
       }, id));
     }
   };
@@ -558,7 +586,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       notify(newProviderId, 'new_job_offer', {
         address: bk.address, date: bk.date, time: bk.time,
         hours: bk.hours, numWorkers: bk.numWorkers, serviceType: bk.serviceType,
-        earnings: (bk.total / 1.029 / 1.18 * 0.80),
+        earnings: providerEarnings(bk),
       }, id);
     }
   };
@@ -741,7 +769,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       pool.forEach(c => notify(c.id, 'job_in_pool', {
         address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
-        earnings: (bk.total / 1.029 / 1.18 * 0.80),
+        earnings: providerEarnings(bk),
       }, id));
     }
   };
