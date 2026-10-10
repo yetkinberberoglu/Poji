@@ -1,3 +1,4 @@
+import { usePathname } from 'expo-router';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
@@ -48,11 +49,21 @@ async function redirect() {
 }
 
 export default function RootLayout() {
+  const routerPath = usePathname();
+  // usePathname is still '/' on the first frame, which made every deep
+  // link look like the front door. The browser knows the truth straight away.
+  const steer = () => {
+    // Only route people arriving at the front door, or coming back from
+    // sign-in. A direct link to a screen should open that screen.
+    const path = typeof window !== 'undefined' ? window.location.pathname : routerPath;
+    if (!path || path === '/' || path === '/index' || path.startsWith('/auth')) redirect();
+  };
+
   useEffect(() => {
-    redirect();
+    steer();
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!session) { router.replace('/auth'); return; }
-      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') redirect();
+      if (event === 'SIGNED_IN') steer();
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -70,6 +81,7 @@ export default function RootLayout() {
         <Stack.Screen name="my-services" />
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="admin" />
+        <Stack.Screen name="admin-trades" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="services" />
         <Stack.Screen name="request" />

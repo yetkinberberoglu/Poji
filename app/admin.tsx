@@ -348,6 +348,11 @@ export default function Admin() {
           <Text style={st.heading}>Admin Panel</Text>
           <Text style={st.sub}>Poji Malta</Text>
         </View>
+        <TouchableOpacity
+          style={{backgroundColor:C.primary, paddingHorizontal:14, paddingVertical:9, borderRadius:10, marginRight:8}}
+          onPress={()=>router.push('/admin-trades')}>
+          <Text style={{color:'#fff', fontWeight:'700', fontSize:13}}>Trades</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={st.signOutBtn} onPress={signOut}>
           <Text style={st.signOutTxt}>Sign Out</Text>
         </TouchableOpacity>

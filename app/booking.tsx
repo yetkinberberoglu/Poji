@@ -231,6 +231,29 @@ export default function BookingScreen() {
     unitPrice: myEff?.unitPrice, quantity: Number(qty), minCharge: myEff?.minCharge,
   }) : null;
 
+  /* A unit is m² for a tiler, an hour for a DJ, a guest for a chef. The
+     wording has to follow, or we end up asking a DJ's client how much
+     area they need in hours. */
+  const unitWord = String(myEff?.unitLabel || (svcType as any)?.unit_label || 'm²');
+  const unitCopy = (() => {
+    const u = unitWord.toLowerCase();
+    if (/^(hour|hr|h)$/.test(u) || u.startsWith('hour'))
+      return { ask: 'How many hours?', ph: 'e.g. 4',
+        hint: 'Count the hours you want covered, including setting up and packing down — the total below is for exactly that many.',
+        priced: 'Priced by the hour.' };
+    if (/^(guest|person|people|head|pax|cover)/.test(u))
+      return { ask: 'How many guests?', ph: 'e.g. 12',
+        hint: 'A rough headcount is fine — it is what the menu and the shopping are worked out from.',
+        priced: 'Priced per guest.' };
+    if (/^(m²|m2|sq)/.test(u))
+      return { ask: `How much area? (${unitWord})`, ph: 'e.g. 24',
+        hint: 'Rough is fine — length × width of each area, added up. We ask now so you can compare what each provider would actually charge, not just their rate.',
+        priced: `Priced by the ${unitWord}.` };
+    return { ask: `How many ${unitWord}s?`, ph: 'e.g. 4',
+      hint: `A rough number is fine — it is what each provider's total is worked out from, so you can compare them properly.`,
+      priced: `Priced by the ${unitWord}.` };
+  })();
+
   const commRate = myEff?.labourCommission;
 
   const flatQuote = fixedQuote({
@@ -406,9 +429,9 @@ export default function BookingScreen() {
         labourTotal: isTransport ? transportQuote.labour : isFixed ? flatQuote.labourSide : null,
         partsTotal:  isFixed ? flatQuote.parts : 0,
         locationNote: notes.trim() || null,
-        // the area travels with the answers so the provider sees what was priced
+        // the quantity travels with the answers so the provider sees what was priced
         answers: isUnit
-          ? { ...answers, area: `${qty} ${myEff?.unitLabel || 'm\u00b2'}` }
+          ? { ...answers, area: `${qty} ${unitWord}${Number(qty) === 1 || /^m/.test(unitWord) ? '' : 's'}` }
           : answers,
         fromLocality: isTransport ? fromLoc : null,
         toLocality:   isTransport ? toLoc : null,
@@ -715,24 +738,17 @@ export default function BookingScreen() {
 
                 {isUnit && (
                   <>
-                    <Text style={s.lbl}>
-                      How much area? ({myEff?.unitLabel || svcType?.unit_label || 'm²'})
-                    </Text>
+                    <Text style={s.lbl}>{unitCopy.ask}</Text>
                     <TextInput style={s.input} value={qty}
                       onChangeText={(v)=>setQty(v.replace(/[^0-9.]/g,''))}
-                      keyboardType="decimal-pad" placeholder="e.g. 24"
+                      keyboardType="decimal-pad" placeholder={unitCopy.ph}
                       placeholderTextColor={C.muted} />
-                    <Text style={s.note}>
-                      Rough is fine — length × width of each area, added up. We ask now
-                      so you can compare what each provider would actually charge,
-                      not just their rate.
-                    </Text>
+                    <Text style={s.note}>{unitCopy.hint}</Text>
                     {unitSum?.minApplied && (
                       <View style={s.fixedNote}>
                         <Text style={s.fixedNoteTxt}>
-                          ℹ️  Small jobs have a minimum charge, so this comes to
-                          €{unitSum.min} rather than €{unitSum.raw}. Worth adding any
-                          other area you want done at the same visit.
+                          ℹ️  There's a minimum charge of €{unitSum.min}, so this comes
+                          to €{unitSum.min} rather than €{unitSum.raw}.
                         </Text>
                       </View>
                     )}
@@ -751,9 +767,9 @@ export default function BookingScreen() {
                 {isUnit && (
                   <View style={s.fixedNote}>
                     <Text style={s.fixedNoteTxt}>
-                      📐  Priced by the {myEff?.unitLabel || 'm²'}. Some providers hold
-                      that price, others treat it as an estimate and confirm once
-                      they've seen photos — each card says which.
+                      📐  {unitCopy.priced} Some providers hold that price, others
+                      treat it as an estimate and confirm once they've seen photos —
+                      each card says which.
                     </Text>
                   </View>
                 )}
