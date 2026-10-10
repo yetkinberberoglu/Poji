@@ -649,13 +649,24 @@ export default function ProviderProfile() {
       {hasHourly && (
         <>
           <Row
-            icon="💶" title="Rate and minimum"
-            value={`€${f.hourly_rate}/hr · min ${f.min_hours}h`}
+            icon="💶" title="Default rate"
+            value={`€${f.hourly_rate}/hr · min ${f.min_hours}h · where a service has none`}
             open={open==='rates'} onPress={()=>setOpen(open==='rates'?null:'rates')}
           />
           {open==='rates' && (
             <View style={s.panel}>
-              <Text style={s.lbl}>Hourly rate (EUR)</Text>
+              {/* The rate lives on the service now. This is only what
+                  covers the ones they have not priced separately, and
+                  saying so is the difference between a provider who
+                  knows about the other screen and one who does not. */}
+              <Text style={s.panelHint}>
+                This covers any job you haven't priced on its own. An hour of
+                cooking is not an hour of cleaning, so each service can carry
+                its own rate — set those under My services and prices, and this
+                one fills the gaps.
+              </Text>
+
+              <Text style={s.lbl}>Default hourly rate (EUR)</Text>
               <TextInput style={s.inputBig} value={String(f.hourly_rate)}
                 onChangeText={(t:string)=>set('hourly_rate', t.replace(/[^0-9.]/g,''))}
                 keyboardType="decimal-pad" />
@@ -676,7 +687,7 @@ export default function ProviderProfile() {
                 </View>
               </View>
 
-              <Text style={s.lbl}>Minimum hours per job</Text>
+              <Text style={s.lbl}>Default minimum hours</Text>
               <View style={s.pillWrap}>
                 {[1,1.5,2,2.5,3,4].map(h=>(
                   <TouchableOpacity key={h} style={[s.pill, Number(f.min_hours)===h&&s.pillOn]}
@@ -685,6 +696,16 @@ export default function ProviderProfile() {
                   </TouchableOpacity>
                 ))}
               </View>
+              <Text style={s.hintSmall}>
+                The shortest job you'd take, where the service itself doesn't say.
+              </Text>
+
+              <TouchableOpacity style={s.svcLink}
+                onPress={()=>router.push('/my-services')}>
+                <Text style={s.svcLinkTxt}>
+                  Set a rate for a particular service  →
+                </Text>
+              </TouchableOpacity>
 
               <Text style={s.lbl}>Materials</Text>
               <View style={s.pillWrap}>
@@ -1090,6 +1111,9 @@ const s = StyleSheet.create({
   askBox:{backgroundColor:C.bgAlt,borderRadius:14,padding:14,marginTop:10,
     borderWidth:1.5,borderColor:C.primary},
   askTitle:{fontSize:15,fontWeight:'800',color:C.dark},
+  svcLink:{marginTop:14,borderRadius:11,paddingVertical:12,alignItems:'center',
+    borderWidth:1.5,borderColor:C.primary,backgroundColor:C.primaryLt},
+  svcLinkTxt:{fontSize:13,fontWeight:'700',color:C.primary},
   askErr:{backgroundColor:C.redLt,borderRadius:10,padding:11,marginTop:12,
     borderWidth:1.5,borderColor:'#FECACA'},
   askErrTxt:{fontSize:12,color:C.red,fontWeight:'700',lineHeight:17},

@@ -85,6 +85,14 @@ export default function PushSettings({ role }: { role: 'client' | 'cleaner' }) {
 
   // ── refused in the browser ──
   if (state === 'denied') {
+    /* The site cannot ask again once it has been refused, so the only way
+       back is the browser's own settings. Naming the actual address
+       matters: this used to say po-ji.com whatever the address really
+       was, which sends anyone on a different host looking in the wrong
+       place. */
+    const host = Platform.OS === 'web' && typeof window !== 'undefined'
+      ? window.location.host : 'Poji';
+
     return (
       <View style={s.boxWarn}>
         <Text style={s.title}>🔕  Notifications are blocked</Text>
@@ -94,8 +102,14 @@ export default function PushSettings({ role }: { role: 'client' | 'cleaner' }) {
             : "You won't be told when your provider is on the way or at the door."}
         </Text>
         <Text style={s.txtSmall}>
-          Turn them back on in your browser settings for po-ji.com, then reload.
+          Poji can't ask again once it's been refused — it has to be changed
+          in the browser. Tap the icon just left of the address bar, open
+          Site settings, set Notifications to Allow, then come back here.
         </Text>
+        <Text style={s.txtHost}>{host}</Text>
+        <TouchableOpacity style={s.recheck} onPress={()=>setState(pushState())}>
+          <Text style={s.recheckTxt}>I've changed it — check again</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -182,6 +196,12 @@ const s = StyleSheet.create({
   off:{fontSize:12,color:C.red,fontWeight:'700'},
   txt:{fontSize:13,color:C.text,lineHeight:19},
   txtSmall:{fontSize:12,color:C.muted,lineHeight:17},
+  txtHost:{fontSize:12,color:C.dark,fontWeight:'800',backgroundColor:C.white,
+    borderRadius:8,paddingHorizontal:10,paddingVertical:6,alignSelf:'flex-start',
+    borderWidth:1,borderColor:'#FDE68A'},
+  recheck:{borderWidth:1.5,borderColor:C.amber,borderRadius:11,paddingVertical:11,
+    alignItems:'center',backgroundColor:C.white,marginTop:2},
+  recheckTxt:{fontSize:13,fontWeight:'700',color:C.amber},
   btn:{backgroundColor:C.primary,borderRadius:13,paddingVertical:14,alignItems:'center',marginTop:2},
   btnTxt:{color:C.white,fontSize:15,fontWeight:'700'},
   dis:{opacity:0.6},
