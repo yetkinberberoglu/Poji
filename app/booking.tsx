@@ -207,19 +207,43 @@ export default function BookingScreen() {
   const lockedCapacity = lockedCleaner ? teamSizeOf(lockedCleaner) : 0;
   const cleaner = cleaners.find(c => c.id === pickedCleaner) || null;
 
-  const cleanerMin = (cleaner as any)?.minHours ?? 2;
+  /**
+   * A provider's figures for this service, falling back to the ones on
+   * their profile. An hour of a chef is not an hour of a cleaner, so the
+   * rate lives on the service; the profile rate is only what covers the
+   * services they have not priced separately.
+   */
+  const effFor = (providerId?: string|null) => {
+    if (!svcType) return null;
+    const c = providerId ? cleaners.find(x => x.id === providerId) : null;
+    return effectiveService(
+      svcType,
+      providerId ? prices[providerId] : null,
+      c ? { hourlyRate: c.rate, minHours: (c as any).minHours } : null,
+    );
+  };
+
+  const myEff = effFor(pickedCleaner);
+
+  /* 0 means nobody has set a rate anywhere. The database refuses such a
+     booking rather than inventing a figure, so the provider list below
+     has to say so instead of letting someone walk into it. */
+  const baseRate = myEff?.hourlyRate ?? 0;
+
+  /* The multiplier lifts a general rate for harder work. A provider who
+     priced this service themselves has already accounted for that, and
+     effectiveService returns 1 for them so it is not charged twice. */
+  const effMult = myEff?.multiplier ?? multiplier;
+
+  const cleanerMin = myEff?.minHours || (cleaner as any)?.minHours || 2;
   const minHours   = Math.max(svcMinHours, cleanerMin);
   const est = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours, numWorkers: num });
   const hours = manualHours ?? est.hours;
 
-  const baseRate = cleaner?.rate ?? 0;
-
   // Two completely different sums
-  const hourlyQuote = quote({ baseRate, hours, numWorkers: num, multiplier, suppliesByCleaner });
-  const effFor = (providerId?: string|null) =>
-    svcType ? effectiveService(svcType, providerId ? prices[providerId] : null) : null;
-
-  const myEff = effFor(pickedCleaner);
+  const hourlyQuote = quote({
+    baseRate, hours, numWorkers: num, multiplier: effMult, suppliesByCleaner,
+  });
   const myRoutePrice = (isTransport && band && vehicle)
     ? routePrice(myEff?.routePrices, vehicle, band) : null;
   const qs0 = (myEff?.questions || svcType?.questions || []) as any[];
@@ -325,9 +349,19 @@ export default function BookingScreen() {
       });
       return { total: q.clientPays, label: fmtM(eff?.minutes || 60) };
     }
-    const cMin = Math.max(svcMinHours, c.minHours ?? 2);
+    /* Their rate for THIS service, not one rate across their whole
+       account. Nobody has set one anywhere, and this provider cannot be
+       booked for this work yet — the database would refuse it. */
+    if (!eff?.hourlyRate) {
+      return { total: null as number|null, label: 'no rate set', noRate: true };
+    }
+
+    const cMin = Math.max(svcMinHours, eff.minHours || c.minHours || 2);
     const e = estimateHours({ baseMinutes, sizeFactor, extraMinutes, minHours: cMin, numWorkers: num });
-    const q = quote({ baseRate: c.rate, hours: e.hours, numWorkers: num, multiplier, suppliesByCleaner });
+    const q = quote({
+      baseRate: eff.hourlyRate, hours: e.hours, numWorkers: num,
+      multiplier: eff.multiplier, suppliesByCleaner,
+    });
     return { total: q.clientPays, label: fmtH(e.hours) };
   };
 
@@ -415,7 +449,7 @@ export default function BookingScreen() {
         total,
         status: 'pending',
       } as any, {
-        multiplier: (isFixed || isQuote) ? 1 : multiplier,
+        multiplier: (isFixed || isQuote) ? 1 : effMult,
         suppliesByCleaner: (isFixed || isQuote) ? false : suppliesByCleaner,
         hourlyRate: (isFixed || isQuote) ? 0 : baseRate,
         extraIds: showExtras ? chosenExtras : [],
@@ -1064,10 +1098,14 @@ export default function BookingScreen() {
                 notice_hours: (c as any).noticeHours,
                 timeOff: (c as any).timeOff,
               }, date, time);
+              /* A provider with no rate for this service cannot be booked
+                 at all - the database refuses it - so the card is dead
+                 rather than letting someone pick it and hit a wall. */
+              const noRate = !!(q as any).noRate;
               return (
                 <TouchableOpacity key={c.id}
-                  style={[s.clCard, on&&s.clCardOn, !free.ok&&s.clCardOff]}
-                  disabled={!free.ok}
+                  style={[s.clCard, on&&s.clCardOn, (!free.ok||noRate)&&s.clCardOff]}
+                  disabled={!free.ok || noRate}
                   onPress={()=>setPicked(c.id)}>
                   <Avatar photoUrl={(c as any).photoUrl} initials={c.initials} color={c.color} size={50} />
                   <View style={{flex:1}}>
@@ -1078,7 +1116,10 @@ export default function BookingScreen() {
                     </View>
                     <Text style={s.clMeta}>
                       ⭐ {c.rating}
-                      {isFixed ? '' : ` · €${c.rate}/hr`}
+                      {/* their rate for this service, not the one on
+                          their account */}
+                      {isFixed || !effFor(c.id)?.hourlyRate
+                        ? '' : ` · €${effFor(c.id)!.hourlyRate}/hr`}
                       {' · '}{teamSizeOf(c)===1 ? 'solo' : `team of ${teamSizeOf(c)}`}
                     </Text>
                     <Text style={s.clAreas}>{c.areas.slice(0,3).join(' · ')}</Text>
@@ -1100,8 +1141,11 @@ export default function BookingScreen() {
                       </>
                     ) : (
                       <>
-                        <Text style={[s.clRange, on&&{color:C.primary}]}>{q.label}</Text>
-                        <Text style={s.clHours}>they quote</Text>
+                        <Text style={[s.clRange,
+                          on&&{color:C.primary}, noRate&&{color:C.muted}]}>{q.label}</Text>
+                        <Text style={s.clHours}>
+                          {noRate ? 'not bookable yet' : 'they quote'}
+                        </Text>
                       </>
                     )}
                   </View>
@@ -1229,7 +1273,9 @@ export default function BookingScreen() {
               <View style={{flex:1}}>
                 <Text style={s.cleanerName}>{cleaner.name}</Text>
                 <Text style={s.cleanerSub}>
-                  {isFixed ? 'Fixed price' : `€${baseRate}/hr base`} · {cleaner.areas?.[0]||'Malta'}
+                  {isFixed ? 'Fixed price'
+                    : effMult === 1 ? `€${baseRate}/hr`
+                    : `€${baseRate}/hr base`} · {cleaner.areas?.[0]||'Malta'}
                 </Text>
               </View>
             </View>
@@ -1342,8 +1388,14 @@ export default function BookingScreen() {
               ) : (
                 <>
                   {[
-                    ['Base rate', `€${baseRate.toFixed(2)}/hr`],
-                    [`${svcType.name} rate  ×${multiplier}`, `€${(baseRate*multiplier).toFixed(2)}/hr`],
+                    /* When the provider priced this service themselves
+                       there is no multiplier to show — the rate already
+                       is the rate for this work. */
+                    ...(effMult === 1
+                      ? [[`${svcType.name} rate`, `€${baseRate.toFixed(2)}/hr`]]
+                      : [['Base rate', `€${baseRate.toFixed(2)}/hr`],
+                         [`${svcType.name} rate  ×${effMult}`,
+                          `€${(baseRate*effMult).toFixed(2)}/hr`]]),
                     ...(suppliesByCleaner ? [['Materials surcharge', '+€2.00/hr']] : []),
                     [`${fmtH(hours)} × ${num}`, `€${hourlyQuote.exVat.toFixed(2)}`],
                     ...(hourlyQuote.vat > 0
