@@ -1,16 +1,21 @@
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useState } from 'react';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { C, S } from '../constants/theme';
 import Logo from '../components/Logo';
 
 export default function Auth() {
-  const [mode, setMode]         = useState('login');
+  /* The welcome screen already asked which of the two things they came for,
+     so arrive on the right tab with the right role picked rather than making
+     them answer it twice. */
+  const params = useLocalSearchParams<{ mode?: string; role?: string }>();
+
+  const [mode, setMode]         = useState(params.mode === 'register' ? 'register' : 'login');
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole]         = useState('client');
+  const [role, setRole]         = useState(params.role === 'cleaner' ? 'cleaner' : 'client');
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
   const [success, setSuccess]   = useState('');
@@ -56,10 +61,14 @@ export default function Auth() {
     <KeyboardAvoidingView style={{ flex:1 }} behavior={Platform.OS==='ios'?'padding':undefined}>
       <ScrollView style={s.wrap} contentContainerStyle={s.container} keyboardShouldPersistTaps="handled">
 
+        <TouchableOpacity style={s.back} onPress={()=>router.push('/welcome')}>
+          <Text style={s.backTxt}>←  What is Poji?</Text>
+        </TouchableOpacity>
+
         <View style={s.logoWrap}>
           <View style={s.logoShadow}><Logo size={84} /></View>
           <Text style={s.brand}>Poji</Text>
-          <Text style={s.sub}>Home services in Malta</Text>
+          <Text style={s.sub}>Trades and services in Malta</Text>
         </View>
 
         <View style={s.tabRow}>
@@ -150,7 +159,10 @@ export default function Auth() {
 
 const s = StyleSheet.create({
   wrap:{flex:1,backgroundColor:C.bg},
-  container:{padding:24,paddingTop:80,paddingBottom:48,gap:16},
+  container:{padding:24,paddingTop:56,paddingBottom:48,gap:16,
+    maxWidth:520,width:'100%',alignSelf:'center'},
+  back:{alignSelf:'flex-start',paddingVertical:6,paddingHorizontal:2},
+  backTxt:{fontSize:14,color:C.primary,fontWeight:'700'},
   logoWrap:{alignItems:'center',marginBottom:8},
   logoShadow:{marginBottom:14,borderRadius:24,...S.md},
   brand:{fontSize:34,fontWeight:'800',color:C.dark},

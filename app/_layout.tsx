@@ -5,48 +5,8 @@ import { useEffect } from 'react';
 import { router } from 'expo-router';
 import { AppProvider } from '../context/AppContext';
 import { supabase } from '../lib/supabase';
+import { routeHome } from '../lib/route-home';
 import InstallPrompt from './install-prompt';
-
-async function redirect() {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) { router.replace('/auth'); return; }
-
-  // Email has to be confirmed before anything else
-  if (!user.email_confirmed_at) { router.replace('/verify-email'); return; }
-
-  const { data: profile, error } = await supabase
-    .from('profiles').select('role').eq('id', user.id).maybeSingle();
-
-  if (error) { router.replace('/(tabs)/home'); return; }
-  const role = profile?.role;
-
-  if (role === 'admin') { router.replace('/admin'); return; }
-
-  if (role === 'cleaner') {
-    const { data: app } = await supabase
-      .from('cleaner_profiles')
-      .select('signup_stage, verification_status')
-      .eq('id', user.id).maybeSingle();
-
-    // Nothing started — the short version first
-    if (!app || !app.signup_stage) { router.replace('/join'); return; }
-
-    // Sent back for changes
-    if (app.verification_status === 'rejected') { router.replace('/onboarding'); return; }
-
-    // Everyone else lands in the app. What they can do there depends on
-    // how far through they are — the Jobs tab handles that.
-    router.replace('/(provider)/jobs');
-    return;
-  }
-
-  // Client — check if they have completed setup
-  const { data: cp } = await supabase
-    .from('client_profiles').select('onboarding_done').eq('id', user.id).maybeSingle();
-  if (!cp || !cp.onboarding_done) { router.replace('/client-setup'); return; }
-
-  router.replace('/(tabs)/home');
-}
 
 export default function RootLayout() {
   const routerPath = usePathname();
@@ -56,14 +16,18 @@ export default function RootLayout() {
     // Only route people arriving at the front door, or coming back from
     // sign-in. A direct link to a screen should open that screen.
     const path = typeof window !== 'undefined' ? window.location.pathname : routerPath;
-    if (!path || path === '/' || path === '/index' || path.startsWith('/auth')) redirect();
+    if (!path || path === '/' || path === '/index' || path.startsWith('/auth')) routeHome();
   };
 
   useEffect(() => {
     steer();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session) { router.replace('/auth'); return; }
-      if (event === 'SIGNED_IN') steer();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      /* Only a real sign-out sends anyone anywhere. This used to fire on any
+         event without a session, INITIAL_SESSION included, so every visitor
+         who was not signed in got thrown at the login form the moment the
+         app booted — whatever page they had actually asked for. */
+      if (event === 'SIGNED_OUT') { router.replace('/welcome'); return; }
+      if (event === 'SIGNED_IN')  { steer(); }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -73,6 +37,7 @@ export default function RootLayout() {
       <StatusBar style="dark" />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="welcome" />
         <Stack.Screen name="auth" />
         <Stack.Screen name="verify-email" />
         <Stack.Screen name="client-setup" />
