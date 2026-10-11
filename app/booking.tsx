@@ -365,6 +365,23 @@ export default function BookingScreen() {
     return { total: q.clientPays, label: fmtH(e.hours) };
   };
 
+  /**
+   * The cheapest provider who would actually take this job.
+   *
+   * There is no platform price from the client's side. A service carries
+   * seed figures so a new provider doesn't start at a blank screen, but
+   * those belong to nobody — showing one as "Fixed price" while the only
+   * provider on the list charges three hundred euro more reads as a
+   * switch. Every figure a client sees should belong to someone who
+   * would turn up and do the work.
+   */
+  const cheapest = (() => {
+    const totals = capable
+      .map(c => quoteFor(c as any).total)
+      .filter((n): n is number => typeof n === 'number' && n > 0);
+    return totals.length ? Math.min(...totals) : null;
+  })();
+
   useEffect(() => {
     (async () => {
       const chosen = cleaners.find(c => c.id === (params.providerId || ''));
@@ -1514,11 +1531,15 @@ export default function BookingScreen() {
               </Text>
               <Text style={s.footerVal}>€{total.toFixed(2)}</Text>
             </>
-          ) : isFixed && svcType ? (
-            <>
-              <Text style={s.footerLbl}>Fixed price</Text>
-              <Text style={s.footerVal}>€{flatQuote.clientPays.toFixed(2)}</Text>
-            </>
+          ) : stepName === 'Provider' ? (
+            cheapest != null ? (
+              <>
+                <Text style={s.footerLbl}>From</Text>
+                <Text style={s.footerVal}>€{cheapest.toFixed(2)}</Text>
+              </>
+            ) : (
+              <Text style={s.footerStep}>Prices vary by provider</Text>
+            )
           ) : (
             <Text style={s.footerStep}>{stepName}</Text>
           )}
