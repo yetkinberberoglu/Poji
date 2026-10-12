@@ -31,6 +31,16 @@ const TIMES = [
 const DAYS_AHEAD = 30;
 const LEAD_HOURS = 2;
 
+/* Gozo and Comino, lower case, with and without the Maltese diacritics.
+   A provider ticks "all of Malta" or "all of Gozo", so to use either box
+   we have to know which island the job is on. */
+const GOZO = new Set([
+  'victoria','rabat (gozo)','rabat gozo','ghajnsielem','għajnsielem','fontana',
+  'gharb','għarb','ghasri','għasri','munxar','nadur','qala','san lawrenz',
+  'sannat','xaghra','xagħra','xewkija','zebbug (gozo)','żebbuġ (gozo)',
+  'marsalforn','xlendi','mgarr (gozo)','mġarr (gozo)','comino','kemmuna',
+]);
+
 const iso = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
@@ -148,18 +158,33 @@ export default function BookingScreen() {
 
   const band = bandFor(fromLoc, toLoc);
 
-  // For fixed and quoted work the provider's own questions decide what we ask,
-  // so they have to be chosen before we can ask anything.
+  /**
+   * Everything that decides who can do the job, and what they would
+   * charge for it, is asked before the provider list.
+   *
+   * Providers set their own option prices, their own areas and their own
+   * working hours. Asking afterwards meant the list someone compared was
+   * built from platform figures and then changed under them — the price
+   * you compared was not the price you paid, and half the list could not
+   * have turned up at all. The cost of this order is that a provider who
+   * wrote their own extra questions has to ask them at the end; the
+   * Provider step handles that below.
+   */
   const STEPS = isTransport
-    ? ['Service','Route','Provider','When','Confirm']
+    ? ['Service','Route','When','Provider','Confirm']
     : (isFixed || isQuote)
-    ? ['Service','Provider','Details','When','Confirm']
+    ? ['Service','Details','When','Provider','Confirm']
     : showExtras
-    ? ['Service','Place','Extras','Provider','When','Confirm']
-    : ['Service','Place','Provider','When','Confirm'];
+    ? ['Service','Place','Extras','When','Provider','Confirm']
+    : ['Service','Place','When','Provider','Confirm'];
 
   // which screen is which, by name rather than number
   const stepName = STEPS[step];
+
+  /* Where to send someone when a dead end has a way out. -1 just means
+     this flow has no such step, and nothing offers the button. */
+  const whenStep  = STEPS.indexOf('When');
+  const placeStep = Math.max(STEPS.indexOf('Place'), STEPS.indexOf('Details'));
 
   const multiplier  = svcType?.multiplier ?? 1;
   const baseMinutes = svcType?.base_minutes ?? 120;
@@ -196,9 +221,45 @@ export default function BookingScreen() {
     return (c.categories || []).includes(trade);
   };
 
-  const allCapable = cleaners
+  /* Where the job is. A saved address carries its locality as its own
+     field; a typed one has to be read out of the line. Longest name
+     first, so "San Gwann" is not beaten by a shorter name sitting
+     inside it. */
+  const jobLocality = (() => {
+    if (useSaved && savedAddr?.locality) return savedAddr.locality.trim();
+    const a = (address || '').toLowerCase();
+    if (!a) return '';
+    const hit = [...ALL_LOCALITIES]
+      .map(String)
+      .sort((x,y) => y.length - x.length)
+      .find(l => l.length > 2 && a.includes(l.toLowerCase()));
+    return hit || '';
+  })();
+
+  const jobInGozo = GOZO.has(jobLocality.toLowerCase());
+
+  /**
+   * Does this provider work where the job is?
+   *
+   * Nobody is hidden on a guess. An empty area list, or the "Malta"
+   * placeholder an account starts with, is not a claim either way, so
+   * they stay on the list. Only a provider who named their localities
+   * and did not name this one drops off.
+   */
+  const coversArea = (c: any) => {
+    if (isTransport || !jobLocality) return true;
+    if (jobInGozo ? c.coversAllGozo : c.coversAllMalta) return true;
+    const areas = (c.areas || []) as string[];
+    if (!areas.length || areas.some(a => /^malta$/i.test(String(a)))) return true;
+    return areas.some(a => String(a).trim().toLowerCase() === jobLocality.toLowerCase());
+  };
+
+  /* Kept apart so the empty state can tell "nobody does this work" from
+     "three people do, none of them here". */
+  const inTrade = cleaners
     .filter(offersService)
     .filter(c => flat || isQuote || teamSizeOf(c) >= num);
+  const allCapable = inTrade.filter(coversArea);
   const capable = lockedToCleaner
     ? allCapable.filter(c => c.id === params.providerId)
     : allCapable;
@@ -246,6 +307,11 @@ export default function BookingScreen() {
   });
   const myRoutePrice = (isTransport && band && vehicle)
     ? routePrice(myEff?.routePrices, vehicle, band) : null;
+  /* The service's own question list, as opposed to whichever list the
+     chosen provider uses. Everyone is asked these before the provider
+     list, so every figure on that list is priced off the same answers. */
+  const svcQs = (svcType?.questions || []) as any[];
+
   const qs0 = (myEff?.questions || svcType?.questions || []) as any[];
 
   // The platform's typical figures, used while they're still answering
@@ -375,12 +441,50 @@ export default function BookingScreen() {
    * switch. Every figure a client sees should belong to someone who
    * would turn up and do the work.
    */
+  /* One pass over the list, read by the cards, the footer and the
+     auto-pick below, so those three can never disagree with each other.
+     The date and time are known by the time anyone gets here, so the
+     availability check is a real answer rather than a placeholder. */
+  const graded = capable.map(c => {
+    const q = quoteFor(c as any);
+    const free = (!date || !time) ? { ok: true } : canTakeJob({
+      availability: (c as any).availability,
+      notice_hours: (c as any).noticeHours,
+      timeOff: (c as any).timeOff,
+    }, date, time);
+    const noRate = !!(q as any).noRate;
+    /* Does this one ask anything the service did not? If so their figure
+       can still move, and the card says "from" rather than promising a
+       number we are about to change. */
+    const moreToAsk = ((effFor(c.id)?.questions || []) as any[])
+      .some((x:any) => !svcQs.some((y:any) => y.id === x.id));
+    return { c, q, free: free as any, noRate, moreToAsk,
+             bookable: !!free.ok && !noRate };
+  });
+
+  const bookable  = graded.filter(g => g.bookable);
+  const freeCount = graded.filter(g => g.free.ok).length;
+
+  /* Whoever can actually turn up comes first, then cheapest. A greyed-out
+     card at the top of the list reads as "nobody can do this". */
+  const ranked = [...graded].sort((a,b) => {
+    if (a.bookable !== b.bookable) return a.bookable ? -1 : 1;
+    const at = typeof a.q.total === 'number' ? a.q.total : Infinity;
+    const bt = typeof b.q.total === 'number' ? b.q.total : Infinity;
+    return at - bt;
+  });
+
   const cheapest = (() => {
-    const totals = capable
-      .map(c => quoteFor(c as any).total)
+    const totals = bookable
+      .map(g => g.q.total)
       .filter((n): n is number => typeof n === 'number' && n > 0);
     return totals.length ? Math.min(...totals) : null;
   })();
+
+  const dayLabel = date
+    ? new Date(date + 'T00:00:00').toLocaleDateString('en-GB',
+        { weekday:'long', day:'numeric', month:'short' })
+    : '';
 
   useEffect(() => {
     (async () => {
@@ -433,9 +537,23 @@ export default function BookingScreen() {
 
   useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
   useEffect(() => { if (date && time && !slotAvailable(date, time)) setTime(''); }, [date]);
+  /* Anything that can push the chosen provider off the list — team size,
+     a new address, a new date — has to let go of them too, or the Confirm
+     step quietly books someone the list no longer shows. */
   useEffect(() => {
-    if (pickedCleaner && !allCapable.find(c => c.id === pickedCleaner)) setPicked(null);
-  }, [num, cleaners]);
+    if (!pickedCleaner) return;
+    if (!allCapable.find(c => c.id === pickedCleaner)) { setPicked(null); return; }
+    const mine = graded.find(g => g.c.id === pickedCleaner);
+    if (mine && !mine.bookable) setPicked(null);
+  }, [num, cleaners, jobLocality, date, time, pickedCleaner]);
+
+  /* One provider and one choice is not a choice. Picking it for them
+     saves a tap that could not go any other way — and the card still
+     shows as selected, so nothing happens behind their back. */
+  useEffect(() => {
+    if (stepName !== 'Provider' || pickedCleaner) return;
+    if (bookable.length === 1) setPicked(bookable[0].c.id);
+  }, [stepName, bookable.length, pickedCleaner]);
 
   // switching service can change the shape of the flow — don't strand them
   useEffect(() => { if (step >= STEPS.length) setStep(STEPS.length - 1); }, [isFixed]);
@@ -512,12 +630,22 @@ export default function BookingScreen() {
   const qs = (myEff?.questions || svcType?.questions || []) as any[];
   const unanswered = missingAnswers(qs, answers);
 
+  /* A provider may replace the service's questions with their own. The
+     ones that move the price were asked before the list; these are
+     whatever is left over, asked under their card rather than on a step
+     of their own, so the flow does not grow a sixth page for the one
+     provider in ten who writes their own. */
+  const extraQs = pickedCleaner
+    ? qs.filter((q:any) => !svcQs.some((x:any) => x.id === q.id))
+    : ([] as any[]);
+  const extraMissing = missingAnswers(extraQs, answers);
+
   const canContinue =
     stepName === 'Service'  ? !!svc && (!isUnit || Number(qty) > 0) :
     stepName === 'Place'    ? !!address && unanswered.length === 0 :
     stepName === 'Route'    ? !!fromLoc && !!toLoc && !!vehicle && !!loadNote.trim() :
     stepName === 'Details'  ? !!address && unanswered.length === 0 :
-    stepName === 'Provider' ? !!pickedCleaner :
+    stepName === 'Provider' ? !!pickedCleaner && extraMissing.length === 0 :
     stepName === 'When'     ? !!date && !!time :
     true;
 
@@ -528,7 +656,8 @@ export default function BookingScreen() {
                                : 'Say what you\u2019re moving') :
     (stepName === 'Place' || stepName === 'Details')
       ? (!address ? 'Enter an address first' : 'Answer the questions above') :
-    stepName === 'Provider' ? 'Pick a provider to continue' :
+    stepName === 'Provider'
+      ? (!pickedCleaner ? 'Pick a provider to continue' : 'Answer the last few questions') :
     stepName === 'When'     ? 'Pick a date and time' : '';
 
   /* ─────────── shared blocks ─────────── */
@@ -859,6 +988,44 @@ export default function BookingScreen() {
               </>
             )}
 
+            {/* Team size belongs here, not next to the provider list: it
+                changes the hours we estimate, and the estimate is shown
+                on the next step. */}
+            {!isFixed && !isQuote && (
+              <>
+                <Text style={s.lbl}>How many people should come?</Text>
+                <View style={s.chips}>
+                  {[1,2,3].map(n=>{
+                    /* Count the people who actually do this work here, not
+                       everyone on the platform — "2 available" has to mean
+                       two who could take this job. */
+                    const pool = lockedToCleaner
+                      ? (lockedCapacity >= n ? 1 : 0)
+                      : cleaners.filter(offersService).filter(coversArea)
+                                .filter(c => teamSizeOf(c) >= n).length;
+                    const off = n > 1 && pool === 0;
+                    return (
+                      <TouchableOpacity key={n}
+                        style={[s.chip, num===n&&s.chipOn, off&&s.chipOff]}
+                        disabled={off} onPress={()=>setNum(n)}>
+                        <Text style={[s.chipTxt, num===n&&s.chipTxtOn, off&&s.chipTxtOff]}>
+                          {n} {n===1?'person':'people'}
+                        </Text>
+                        {n>1 && !lockedToCleaner && pool>0 && (
+                          <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{pool} available</Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {num > 1 && (
+                  <Text style={s.teamNote}>
+                    👥 The work is shared, so the job finishes sooner.
+                  </Text>
+                )}
+              </>
+            )}
+
             <Text style={s.lbl}>Where should we come?</Text>
             {AddressBlock}
 
@@ -948,7 +1115,9 @@ export default function BookingScreen() {
               {cleaner ? `What ${cleaner.name.split(' ')[0]} needs to know` : 'A few details'}
             </Text>
             <Text style={s.hint}>
-              Your address is only shared once they've accepted the job.
+              Providers charge differently for these answers, so we ask before
+              you compare them — the figure you pick is the figure you pay.
+              Your address is only shared once someone accepts the job.
             </Text>
             {AddressBlock}
 
@@ -1047,37 +1216,6 @@ export default function BookingScreen() {
               </View>
             )}
 
-            {!isFixed && (
-              <>
-                <Text style={s.stepIntro}>How many people?</Text>
-                <View style={s.chips}>
-                  {[1,2,3].map(n=>{
-                    const pool = lockedToCleaner
-                      ? (lockedCapacity >= n ? 1 : 0)
-                      : cleaners.filter(c => teamSizeOf(c) >= n).length;
-                    const off = pool === 0;
-                    return (
-                      <TouchableOpacity key={n}
-                        style={[s.chip, num===n&&s.chipOn, off&&s.chipOff]}
-                        disabled={off} onPress={()=>setNum(n)}>
-                        <Text style={[s.chipTxt, num===n&&s.chipTxtOn, off&&s.chipTxtOff]}>
-                          {n} {n===1?'person':'people'}
-                        </Text>
-                        {n>1 && !lockedToCleaner && pool>0 && (
-                          <Text style={[s.chipSub, num===n&&s.chipTxtOn]}>{pool} available</Text>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {num > 1 && (
-                  <Text style={s.teamNote}>
-                    👥 The work is shared, so the job finishes sooner.
-                  </Text>
-                )}
-              </>
-            )}
-
             <Text style={[s.lbl, isFixed && {marginTop:8}]}>
               {lockedToCleaner ? 'Your provider' : 'Choose your provider'}
             </Text>
@@ -1087,38 +1225,67 @@ export default function BookingScreen() {
                 : isQuote
                 ? "Nobody can price this without seeing it. Pick someone, message them, and they'll send a figure before anyone travels."
                 : isFixed
-                ? "Each provider sets their own price and their own parts. Pick one and they'll ask what they need to know."
+                ? "Each provider sets their own price and their own parts. These are their real prices for the job you described."
                 : `Only providers who can send ${num} ${num===1?'person':'people'} are shown. Each sets their own rate.`}
             </Text>
 
+            {!!date && !!time && bookable.length > 0 && (
+              <Text style={s.availNote}>
+                ✓  {bookable.length === 1 ? 'One provider is' : `${bookable.length} providers are`} free
+                {dayLabel ? ` on ${dayLabel}` : ''} at {time}
+                {jobLocality && !isTransport ? ` and cover ${jobLocality}` : ''}.
+              </Text>
+            )}
+
             {capable.length === 0 ? (
               <View style={s.emptyBox}>
-                <Text style={s.emptyIcon}>👥</Text>
+                <Text style={s.emptyIcon}>{lockedToCleaner ? '👥' : jobLocality && inTrade.length > 0 ? '📍' : '👥'}</Text>
                 <Text style={s.emptyTxt}>
                   {lockedToCleaner
                     ? `${lockedCleaner?.name || 'This provider'} can't cover this`
+                    : jobLocality && inTrade.length > 0
+                    ? `Nobody covers ${jobLocality} yet`
                     : 'Nobody available'}
                 </Text>
-                <Text style={s.emptySub}>Try a different option for this job.</Text>
-                {lockedToCleaner && (
+                <Text style={s.emptySub}>
+                  {jobLocality && inTrade.length > 0 && !lockedToCleaner
+                    ? `${inTrade.length} ${inTrade.length === 1 ? 'provider does' : 'providers do'} this work, but none of them list ${jobLocality} as an area they travel to.`
+                    : 'Try a different option for this job.'}
+                </Text>
+                {lockedToCleaner ? (
                   <TouchableOpacity style={s.emptyBtn}
                     onPress={()=>{ setLocked(false); setPicked(null); }}>
                     <Text style={s.emptyBtnTxt}>Compare other providers</Text>
                   </TouchableOpacity>
+                ) : jobLocality && inTrade.length > 0 && placeStep >= 0 ? (
+                  <TouchableOpacity style={s.emptyBtn} onPress={()=>setStep(placeStep)}>
+                    <Text style={s.emptyBtnTxt}>Change the address</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : freeCount === 0 && !!date && !!time ? (
+              /* Everyone who does this work, here, is booked or away at
+                 that hour. Saying so beats a list of grey cards, and the
+                 way out is one tap back rather than a restart. */
+              <View style={s.emptyBox}>
+                <Text style={s.emptyIcon}>🕑</Text>
+                <Text style={s.emptyTxt}>Nobody free at that time</Text>
+                <Text style={s.emptySub}>
+                  {capable.length === 1
+                    ? `${capable[0].name.split(' ')[0]} does this work, but not on ${dayLabel} at ${time}.`
+                    : `All ${capable.length} providers who do this work are booked or off on ${dayLabel} at ${time}.`}
+                </Text>
+                {whenStep >= 0 && (
+                  <TouchableOpacity style={s.emptyBtn} onPress={()=>setStep(whenStep)}>
+                    <Text style={s.emptyBtnTxt}>Pick another time</Text>
+                  </TouchableOpacity>
                 )}
               </View>
-            ) : capable.map(c=>{
+            ) : ranked.map(({ c, q, free, noRate, moreToAsk })=>{
               const on = pickedCleaner === c.id;
-              const q  = quoteFor(c as any);
-              const free = (!date || !time) ? { ok:true } : canTakeJob({
-                availability: (c as any).availability,
-                notice_hours: (c as any).noticeHours,
-                timeOff: (c as any).timeOff,
-              }, date, time);
               /* A provider with no rate for this service cannot be booked
                  at all - the database refuses it - so the card is dead
                  rather than letting someone pick it and hit a wall. */
-              const noRate = !!(q as any).noRate;
               return (
                 <TouchableOpacity key={c.id}
                   style={[s.clCard, on&&s.clCardOn, (!free.ok||noRate)&&s.clCardOff]}
@@ -1152,7 +1319,13 @@ export default function BookingScreen() {
                     {q.total != null ? (
                       <>
                         <Text style={[s.clTotal, on&&{color:C.primary}]}>
-                          {isFixed ? `from €${q.total.toFixed(0)}` : `€${q.total.toFixed(0)}`}
+                          {/* Priced off the answers already given, so it is
+                              their figure and not a platform average. Only
+                              a provider with questions of their own gets a
+                              "from". */}
+                          {isFixed && moreToAsk
+                            ? `from €${q.total.toFixed(0)}`
+                            : `€${q.total.toFixed(0)}`}
                         </Text>
                         <Text style={s.clHours}>{q.label}</Text>
                       </>
@@ -1169,6 +1342,23 @@ export default function BookingScreen() {
                 </TouchableOpacity>
               );
             })}
+
+            {/* Whatever this provider asks that the service did not. One
+                small block under their card beats a sixth step that most
+                providers would leave empty. */}
+            {!!pickedCleaner && extraQs.length > 0 && (
+              <View style={s.moreQs}>
+                <Text style={s.moreQsTitle}>
+                  {(cleaner?.name || 'They').split(' ')[0]} asks a couple more
+                </Text>
+                <Text style={s.moreQsHint}>
+                  Their own questions, not ours. Answering changes what they
+                  charge, and the figure in the bar below follows along.
+                </Text>
+                <ServiceQuestions questions={extraQs} answers={answers}
+                  onChange={(id,v)=>setAnswers(a=>({...a,[id]:v}))} />
+              </View>
+            )}
           </View>
         )}
 
@@ -1176,6 +1366,11 @@ export default function BookingScreen() {
         {stepName === 'When' && (
           <View style={s.step}>
             <Text style={s.stepIntro}>When should we come?</Text>
+            <Text style={s.hint}>
+              {capable.length === 0
+                ? 'Pick a time and we’ll show you who can take it.'
+                : `${capable.length} ${capable.length===1?'provider does':'providers do'} this work${jobLocality && !isTransport ? ` around ${jobLocality}` : ''}. Pick a time and the next step only shows the ones who are actually free.`}
+            </Text>
 
             {isFixed ? (
               <View style={s.estBox}>
@@ -1531,7 +1726,7 @@ export default function BookingScreen() {
               </Text>
               <Text style={s.footerVal}>€{total.toFixed(2)}</Text>
             </>
-          ) : stepName === 'Provider' ? (
+          ) : (stepName === 'Provider' || stepName === 'When') ? (
             cheapest != null ? (
               <>
                 <Text style={s.footerLbl}>From</Text>
@@ -1630,6 +1825,13 @@ const s = StyleSheet.create({
   chipTxtOff:{color:C.muted},
   chipSub:{fontSize:10,color:C.muted,marginTop:2},
   teamNote:{fontSize:12,color:C.accent,fontWeight:'700',marginTop:10,lineHeight:17},
+  availNote:{fontSize:12.5,color:C.green,fontWeight:'700',lineHeight:18,
+    backgroundColor:C.greenLt,borderRadius:10,paddingVertical:8,paddingHorizontal:12,
+    marginBottom:10},
+  moreQs:{marginTop:16,backgroundColor:C.white,borderRadius:16,padding:16,
+    borderWidth:1.5,borderColor:C.primary,gap:4},
+  moreQsTitle:{fontSize:15,fontWeight:'800',color:C.dark},
+  moreQsHint:{fontSize:12,color:C.muted,lineHeight:17,marginBottom:6},
 
   svcCard:{padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10},
   svcCardOn:{borderColor:C.primary,backgroundColor:C.primaryLt},

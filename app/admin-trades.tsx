@@ -202,6 +202,216 @@ export default function AdminTrades() {
     return <View style={s.center}><ActivityIndicator color={C.primary} size="large"/></View>;
   }
 
+  /* The forms used to sit at the top of the page. Tapping a trade near the
+     bottom of the list looked like it did nothing — the form had opened
+     off-screen above. They render under the row being edited now, the same
+     way the provider screens already work. */
+  const CatForm = () => !editCat ? null : (
+          <View style={s.form}>
+            <Text style={s.formTitle}>
+              {isNew ? 'New category' : `Edit ${editCat.name}`}
+            </Text>
+
+            {isNew && (
+              <>
+                <Text style={s.lbl}>Id</Text>
+                <TextInput style={s.input} value={editCat.id || ''}
+                  onChangeText={v=>setEditCat(c=>({...c, id: slug(v)}))}
+                  placeholder="outdoor" placeholderTextColor={C.muted} />
+                <Text style={s.note}>
+                  Lower case, no spaces. This never changes afterwards — it is
+                  written into every service and booking underneath it.
+                </Text>
+              </>
+            )}
+
+            <Text style={s.lbl}>Name</Text>
+            <TextInput style={s.input} value={editCat.name || ''}
+              onChangeText={v=>setEditCat(c=>({...c, name:v}))}
+              placeholder="Outdoor & property" placeholderTextColor={C.muted} />
+
+            <Text style={s.lbl}>Icon</Text>
+            <TextInput style={s.input} value={editCat.icon || ''}
+              onChangeText={v=>setEditCat(c=>({...c, icon:v}))}
+              placeholder="🌿" placeholderTextColor={C.muted} />
+
+            <Text style={s.lbl}>One line for clients</Text>
+            <TextInput style={s.input} value={editCat.description || ''}
+              onChangeText={v=>setEditCat(c=>({...c, description:v}))}
+              placeholder="Gardens, pools, solar, moving" placeholderTextColor={C.muted} />
+
+            <View style={s.row2}>
+              <View style={{flex:1}}>
+                <Text style={s.lbl}>Colour</Text>
+                <TextInput style={s.input} value={editCat.colour || ''}
+                  onChangeText={v=>setEditCat(c=>({...c, colour:v}))}
+                  placeholder="#059669" placeholderTextColor={C.muted} />
+              </View>
+              <View style={{flex:1}}>
+                <Text style={s.lbl}>Order</Text>
+                <TextInput style={s.input} value={String(editCat.sort_order ?? '')}
+                  onChangeText={v=>setEditCat(c=>({...c, sort_order: Number(v.replace(/[^0-9]/g,'')) }))}
+                  keyboardType="number-pad" placeholder="6" placeholderTextColor={C.muted} />
+              </View>
+            </View>
+
+            <View style={s.switchRow}>
+              <View style={{flex:1}}>
+                <Text style={s.switchLbl}>Emergency category</Text>
+                <Text style={s.note}>Shown first and styled as urgent</Text>
+              </View>
+              <Switch value={!!editCat.urgent}
+                onValueChange={v=>setEditCat(c=>({...c, urgent:v}))}
+                trackColor={{false:C.border, true:C.amber}} thumbColor={C.white}/>
+            </View>
+
+            <View style={s.formBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={()=>{setEditCat(null);setError('');}}>
+                <Text style={s.cancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.saveBtn, busy==='cat'&&s.dis]}
+                disabled={busy==='cat'} onPress={saveCat}>
+                {busy==='cat' ? <ActivityIndicator color={C.white} size="small"/>
+                  : <Text style={s.saveTxt}>Save category</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+  );
+
+  const TradeForm = () => !editTrade ? null : (
+          <View style={s.form}>
+            <Text style={s.formTitle}>
+              {isNew ? 'New trade' : `Edit ${editTrade.name}`}
+            </Text>
+
+            {isNew && (
+              <>
+                <Text style={s.lbl}>Id</Text>
+                <TextInput style={s.input} value={editTrade.id || ''}
+                  onChangeText={v=>setEditTrade(t=>({...t, id: slug(v)}))}
+                  placeholder="plasterer" placeholderTextColor={C.muted} />
+                <Text style={s.note}>
+                  Lower case, no spaces, and permanent. Services and provider
+                  profiles store this exact string.
+                </Text>
+              </>
+            )}
+
+            <Text style={s.lbl}>Category</Text>
+            <View style={s.chips}>
+              {cats.map(c=>(
+                <TouchableOpacity key={c.id}
+                  style={[s.chip, editTrade.category_id===c.id&&s.chipOn]}
+                  onPress={()=>setEditTrade(t=>({...t, category_id:c.id}))}>
+                  <Text style={[s.chipTxt, editTrade.category_id===c.id&&s.chipTxtOn]}>
+                    {c.icon} {c.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={s.lbl}>Name</Text>
+            <TextInput style={s.input} value={editTrade.name || ''}
+              onChangeText={v=>setEditTrade(t=>({...t, name:v}))}
+              placeholder="Plasterer" placeholderTextColor={C.muted} />
+
+            <Text style={s.lbl}>Icon</Text>
+            <TextInput style={s.input} value={editTrade.icon || ''}
+              onChangeText={v=>setEditTrade(t=>({...t, icon:v}))}
+              placeholder="🧰" placeholderTextColor={C.muted} />
+
+            <Text style={s.lbl}>One line for clients</Text>
+            <TextInput style={s.input} value={editTrade.description || ''}
+              onChangeText={v=>setEditTrade(t=>({...t, description:v}))}
+              placeholder="Skimming, rendering, cornice" placeholderTextColor={C.muted} />
+
+            <Text style={s.lbl}>Usual pricing</Text>
+            <View style={s.chips}>
+              {['hourly','fixed'].map(p=>(
+                <TouchableOpacity key={p}
+                  style={[s.chip, (editTrade.pricing||'hourly')===p&&s.chipOn]}
+                  onPress={()=>setEditTrade(t=>({...t, pricing:p}))}>
+                  <Text style={[s.chipTxt, (editTrade.pricing||'hourly')===p&&s.chipTxtOn]}>
+                    {p === 'hourly' ? 'By the hour' : 'Fixed price'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={s.note}>
+              A hint for the trade card only. Each service sets its own model.
+            </Text>
+
+            <Text style={s.lbl}>Order within the category</Text>
+            <TextInput style={s.input} value={String(editTrade.sort_order ?? '')}
+              onChangeText={v=>setEditTrade(t=>({...t, sort_order: Number(v.replace(/[^0-9]/g,'')) }))}
+              keyboardType="number-pad" placeholder="9" placeholderTextColor={C.muted} />
+
+            <View style={s.switchRow}>
+              <View style={{flex:1}}>
+                <Text style={s.switchLbl}>Roadside</Text>
+                <Text style={s.note}>
+                  Asks for GPS and goes through the callout flow instead of an address
+                </Text>
+              </View>
+              <Switch value={!!editTrade.roadside}
+                onValueChange={v=>setEditTrade(t=>({...t, roadside:v}))}
+                trackColor={{false:C.border, true:C.amber}} thumbColor={C.white}/>
+            </View>
+
+            <View style={s.switchRow}>
+              <View style={{flex:1}}>
+                <Text style={s.switchLbl}>Bookable now</Text>
+                <Text style={s.note}>
+                  Off means clients can register interest but not book. Leave it off
+                  until you have a provider who actually covers it.
+                </Text>
+              </View>
+              <Switch value={!!editTrade.live}
+                onValueChange={v=>setEditTrade(t=>({...t, live:v}))}
+                trackColor={{false:C.border, true:C.green}} thumbColor={C.white}/>
+            </View>
+
+            <View style={s.switchRow}>
+              <View style={{flex:1}}>
+                <Text style={s.switchLbl}>Needs proof</Text>
+                <Text style={s.note}>
+                  A provider cannot be granted this trade without a document.
+                  Whether a trade is licensed in Malta is a legal question — check
+                  it rather than assuming.
+                </Text>
+              </View>
+              <Switch value={!!editTrade.requires_proof}
+                onValueChange={v=>setEditTrade(t=>({...t, requires_proof:v}))}
+                trackColor={{false:C.border, true:C.red}} thumbColor={C.white}/>
+            </View>
+
+            {!!editTrade.requires_proof && (
+              <>
+                <Text style={s.lbl}>What they need to show</Text>
+                <TextInput style={s.input} value={editTrade.proof_label || ''}
+                  onChangeText={v=>setEditTrade(t=>({...t, proof_label:v}))}
+                  placeholder="a food handling certificate"
+                  placeholderTextColor={C.muted} />
+                <Text style={s.note}>
+                  This sentence is shown to the provider when they ask for the
+                  trade, so write it as the thing they need to find.
+                </Text>
+              </>
+            )}
+
+            <View style={s.formBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={()=>{setEditTrade(null);setError('');}}>
+                <Text style={s.cancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.saveBtn, busy==='trade'&&s.dis]}
+                disabled={busy==='trade'} onPress={saveTrade}>
+                {busy==='trade' ? <ActivityIndicator color={C.white} size="small"/>
+                  : <Text style={s.saveTxt}>Save trade</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+  );
+
   return (
     <View style={s.wrap}>
       <View style={s.hdr}>
@@ -336,213 +546,12 @@ export default function AdminTrades() {
           </View>
         )}
 
-        {/* ── category form ── */}
-        {editCat ? (
-          <View style={s.form}>
-            <Text style={s.formTitle}>
-              {isNew ? 'New category' : `Edit ${editCat.name}`}
-            </Text>
 
-            {isNew && (
-              <>
-                <Text style={s.lbl}>Id</Text>
-                <TextInput style={s.input} value={editCat.id || ''}
-                  onChangeText={v=>setEditCat(c=>({...c, id: slug(v)}))}
-                  placeholder="outdoor" placeholderTextColor={C.muted} />
-                <Text style={s.note}>
-                  Lower case, no spaces. This never changes afterwards — it is
-                  written into every service and booking underneath it.
-                </Text>
-              </>
-            )}
 
-            <Text style={s.lbl}>Name</Text>
-            <TextInput style={s.input} value={editCat.name || ''}
-              onChangeText={v=>setEditCat(c=>({...c, name:v}))}
-              placeholder="Outdoor & property" placeholderTextColor={C.muted} />
-
-            <Text style={s.lbl}>Icon</Text>
-            <TextInput style={s.input} value={editCat.icon || ''}
-              onChangeText={v=>setEditCat(c=>({...c, icon:v}))}
-              placeholder="🌿" placeholderTextColor={C.muted} />
-
-            <Text style={s.lbl}>One line for clients</Text>
-            <TextInput style={s.input} value={editCat.description || ''}
-              onChangeText={v=>setEditCat(c=>({...c, description:v}))}
-              placeholder="Gardens, pools, solar, moving" placeholderTextColor={C.muted} />
-
-            <View style={s.row2}>
-              <View style={{flex:1}}>
-                <Text style={s.lbl}>Colour</Text>
-                <TextInput style={s.input} value={editCat.colour || ''}
-                  onChangeText={v=>setEditCat(c=>({...c, colour:v}))}
-                  placeholder="#059669" placeholderTextColor={C.muted} />
-              </View>
-              <View style={{flex:1}}>
-                <Text style={s.lbl}>Order</Text>
-                <TextInput style={s.input} value={String(editCat.sort_order ?? '')}
-                  onChangeText={v=>setEditCat(c=>({...c, sort_order: Number(v.replace(/[^0-9]/g,'')) }))}
-                  keyboardType="number-pad" placeholder="6" placeholderTextColor={C.muted} />
-              </View>
-            </View>
-
-            <View style={s.switchRow}>
-              <View style={{flex:1}}>
-                <Text style={s.switchLbl}>Emergency category</Text>
-                <Text style={s.note}>Shown first and styled as urgent</Text>
-              </View>
-              <Switch value={!!editCat.urgent}
-                onValueChange={v=>setEditCat(c=>({...c, urgent:v}))}
-                trackColor={{false:C.border, true:C.amber}} thumbColor={C.white}/>
-            </View>
-
-            <View style={s.formBtns}>
-              <TouchableOpacity style={s.cancelBtn} onPress={()=>{setEditCat(null);setError('');}}>
-                <Text style={s.cancelTxt}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.saveBtn, busy==='cat'&&s.dis]}
-                disabled={busy==='cat'} onPress={saveCat}>
-                {busy==='cat' ? <ActivityIndicator color={C.white} size="small"/>
-                  : <Text style={s.saveTxt}>Save category</Text>}
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
-
-        {/* ── trade form ── */}
-        {editTrade ? (
-          <View style={s.form}>
-            <Text style={s.formTitle}>
-              {isNew ? 'New trade' : `Edit ${editTrade.name}`}
-            </Text>
-
-            {isNew && (
-              <>
-                <Text style={s.lbl}>Id</Text>
-                <TextInput style={s.input} value={editTrade.id || ''}
-                  onChangeText={v=>setEditTrade(t=>({...t, id: slug(v)}))}
-                  placeholder="plasterer" placeholderTextColor={C.muted} />
-                <Text style={s.note}>
-                  Lower case, no spaces, and permanent. Services and provider
-                  profiles store this exact string.
-                </Text>
-              </>
-            )}
-
-            <Text style={s.lbl}>Category</Text>
-            <View style={s.chips}>
-              {cats.map(c=>(
-                <TouchableOpacity key={c.id}
-                  style={[s.chip, editTrade.category_id===c.id&&s.chipOn]}
-                  onPress={()=>setEditTrade(t=>({...t, category_id:c.id}))}>
-                  <Text style={[s.chipTxt, editTrade.category_id===c.id&&s.chipTxtOn]}>
-                    {c.icon} {c.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={s.lbl}>Name</Text>
-            <TextInput style={s.input} value={editTrade.name || ''}
-              onChangeText={v=>setEditTrade(t=>({...t, name:v}))}
-              placeholder="Plasterer" placeholderTextColor={C.muted} />
-
-            <Text style={s.lbl}>Icon</Text>
-            <TextInput style={s.input} value={editTrade.icon || ''}
-              onChangeText={v=>setEditTrade(t=>({...t, icon:v}))}
-              placeholder="🧰" placeholderTextColor={C.muted} />
-
-            <Text style={s.lbl}>One line for clients</Text>
-            <TextInput style={s.input} value={editTrade.description || ''}
-              onChangeText={v=>setEditTrade(t=>({...t, description:v}))}
-              placeholder="Skimming, rendering, cornice" placeholderTextColor={C.muted} />
-
-            <Text style={s.lbl}>Usual pricing</Text>
-            <View style={s.chips}>
-              {['hourly','fixed'].map(p=>(
-                <TouchableOpacity key={p}
-                  style={[s.chip, (editTrade.pricing||'hourly')===p&&s.chipOn]}
-                  onPress={()=>setEditTrade(t=>({...t, pricing:p}))}>
-                  <Text style={[s.chipTxt, (editTrade.pricing||'hourly')===p&&s.chipTxtOn]}>
-                    {p === 'hourly' ? 'By the hour' : 'Fixed price'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={s.note}>
-              A hint for the trade card only. Each service sets its own model.
-            </Text>
-
-            <Text style={s.lbl}>Order within the category</Text>
-            <TextInput style={s.input} value={String(editTrade.sort_order ?? '')}
-              onChangeText={v=>setEditTrade(t=>({...t, sort_order: Number(v.replace(/[^0-9]/g,'')) }))}
-              keyboardType="number-pad" placeholder="9" placeholderTextColor={C.muted} />
-
-            <View style={s.switchRow}>
-              <View style={{flex:1}}>
-                <Text style={s.switchLbl}>Roadside</Text>
-                <Text style={s.note}>
-                  Asks for GPS and goes through the callout flow instead of an address
-                </Text>
-              </View>
-              <Switch value={!!editTrade.roadside}
-                onValueChange={v=>setEditTrade(t=>({...t, roadside:v}))}
-                trackColor={{false:C.border, true:C.amber}} thumbColor={C.white}/>
-            </View>
-
-            <View style={s.switchRow}>
-              <View style={{flex:1}}>
-                <Text style={s.switchLbl}>Bookable now</Text>
-                <Text style={s.note}>
-                  Off means clients can register interest but not book. Leave it off
-                  until you have a provider who actually covers it.
-                </Text>
-              </View>
-              <Switch value={!!editTrade.live}
-                onValueChange={v=>setEditTrade(t=>({...t, live:v}))}
-                trackColor={{false:C.border, true:C.green}} thumbColor={C.white}/>
-            </View>
-
-            <View style={s.switchRow}>
-              <View style={{flex:1}}>
-                <Text style={s.switchLbl}>Needs proof</Text>
-                <Text style={s.note}>
-                  A provider cannot be granted this trade without a document.
-                  Whether a trade is licensed in Malta is a legal question — check
-                  it rather than assuming.
-                </Text>
-              </View>
-              <Switch value={!!editTrade.requires_proof}
-                onValueChange={v=>setEditTrade(t=>({...t, requires_proof:v}))}
-                trackColor={{false:C.border, true:C.red}} thumbColor={C.white}/>
-            </View>
-
-            {!!editTrade.requires_proof && (
-              <>
-                <Text style={s.lbl}>What they need to show</Text>
-                <TextInput style={s.input} value={editTrade.proof_label || ''}
-                  onChangeText={v=>setEditTrade(t=>({...t, proof_label:v}))}
-                  placeholder="a food handling certificate"
-                  placeholderTextColor={C.muted} />
-                <Text style={s.note}>
-                  This sentence is shown to the provider when they ask for the
-                  trade, so write it as the thing they need to find.
-                </Text>
-              </>
-            )}
-
-            <View style={s.formBtns}>
-              <TouchableOpacity style={s.cancelBtn} onPress={()=>{setEditTrade(null);setError('');}}>
-                <Text style={s.cancelTxt}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.saveBtn, busy==='trade'&&s.dis]}
-                disabled={busy==='trade'} onPress={saveTrade}>
-                {busy==='trade' ? <ActivityIndicator color={C.white} size="small"/>
-                  : <Text style={s.saveTxt}>Save trade</Text>}
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
+        {/* A brand new one has no row to sit under, so it opens here where
+            the buttons that create it are. */}
+        {isNew && CatForm()}
+        {isNew && TradeForm()}
 
         {!editCat && !editTrade && (
           <View style={s.addRow}>
@@ -572,8 +581,11 @@ export default function AdminTrades() {
                 </Text>
               </TouchableOpacity>
 
+              {!isNew && editCat?.id === c.id && CatForm()}
+
               {mine.map(t=>(
-                <View key={t.id} style={[s.card, !t.active&&s.cardOff]}>
+                <View key={t.id}>
+                <View style={[s.card, !t.active&&s.cardOff]}>
                   <Text style={s.cardIcon}>{t.icon}</Text>
                   <TouchableOpacity style={{flex:1}}
                     onPress={()=>{ setIsNew(false); setEditTrade(t); setEditCat(null); }}>
@@ -601,6 +613,9 @@ export default function AdminTrades() {
                       </TouchableOpacity>
                     )}
                   </View>
+                </View>
+
+                {!isNew && editTrade?.id === t.id && TradeForm()}
                 </View>
               ))}
 

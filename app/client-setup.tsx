@@ -57,7 +57,13 @@ export default function ClientSetup() {
       if (!f.last_name)  m.push('Last name');
       const ph = validatePhone(f.phone);
       if (!ph.ok) m.push(ph.reason!);
-      else if (!f.phone_verified) m.push('Confirm your mobile with the code we send');
+      /* Confirming the number used to be required here, and it closed the
+         door on anyone the code did not reach. The number is what a
+         provider rings on the day, so a well-formed one is enough to sign
+         up; whether it is really theirs is worth knowing at the first
+         booking, not at the front door. phone_verified is still written,
+         still false until they confirm, so nothing downstream loses
+         track of it. */
     }
     if (s===1) {
       if (!f.default_address)  m.push('Your address');
@@ -160,11 +166,22 @@ export default function ClientSetup() {
               </Text>
 
               {validatePhone(f.phone).ok && (
-                <PhoneVerify
-                  phone={validatePhone(f.phone).value || f.phone}
-                  verified={!!f.phone_verified}
-                  onVerified={(v)=>{ setF((p:any)=>({...p, phone:v, phone_verified:true})); setMissing([]); }}
-                />
+                <>
+                  <PhoneVerify
+                    phone={validatePhone(f.phone).value || f.phone}
+                    verified={!!f.phone_verified}
+                    onVerified={(v)=>{ setF((p:any)=>({...p, phone:v, phone_verified:true})); setMissing([]); }}
+                  />
+                  {/* Said plainly, so nobody sits waiting for a code that
+                      is not coming and gives up on the sign-up. */}
+                  {!f.phone_verified && (
+                    <Text style={s.skipNote}>
+                      Confirming now is optional — if no code arrives, carry on
+                      with Continue. We'll confirm the number on your first
+                      booking, when your provider actually needs to reach you.
+                    </Text>
+                  )}
+                </>
               )}
 
               <TouchableOpacity style={[s.optCard, f.whatsapp_opt_in&&s.optCardOn]}
@@ -205,7 +222,11 @@ export default function ClientSetup() {
                 <Text style={s.summaryTitle}>You're all set</Text>
                 {[
                   ['Name',  `${f.first_name} ${f.last_name}`],
-                  ['Phone', f.phone],
+                  /* Not hidden. An unconfirmed number is still the number
+                     we will ring, and they should know its state. */
+                  ['Phone', f.phone
+                    ? `${f.phone}${f.phone_verified ? '  ✓ confirmed' : '  · not confirmed yet'}`
+                    : ''],
                   ['Home',  `${f.default_address}${f.default_locality?', '+f.default_locality:''}`],
                   ['WhatsApp', f.whatsapp_opt_in ? 'On' : 'Off'],
                 ].map(([k,v])=>(
@@ -250,6 +271,9 @@ const s = StyleSheet.create({
   intro:{fontSize:14,color:C.muted,lineHeight:21,marginTop:8},
   lbl:{fontSize:12,fontWeight:'700',color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginTop:20,marginBottom:8},
   hint:{fontSize:12,color:C.muted,marginTop:6,lineHeight:17},
+  skipNote:{fontSize:12,color:C.muted,lineHeight:18,marginTop:10,
+    backgroundColor:C.bgAlt,borderRadius:12,padding:12,
+    borderWidth:1,borderColor:C.border},
   input:{backgroundColor:C.white,borderRadius:14,paddingHorizontal:16,paddingVertical:14,fontSize:15,color:C.text,borderWidth:1.5,borderColor:C.border},
   row2:{flexDirection:'row',gap:12},
   chips:{flexDirection:'row',flexWrap:'wrap',gap:8},

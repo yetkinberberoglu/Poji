@@ -76,10 +76,24 @@ export default function Chat({
     setCalling(false);
   };
 
+  /**
+   * The one place a message joins the list. A row can arrive twice — once
+   * from the insert that wrote it, once from realtime echoing it back —
+   * and keying by id means it still shows once. Merging rather than
+   * replacing also means a message that lands mid-fetch is not wiped by
+   * the fetch finishing a moment later.
+   */
+  const merge = (rows: Msg[]) => setMsgs(prev => {
+    const byId = new Map(prev.map(m => [m.id, m]));
+    rows.forEach(r => byId.set(r.id, { ...byId.get(r.id), ...r } as Msg));
+    return [...byId.values()].sort((a, b) =>
+      a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0);
+  });
+
   const load = async () => {
     const { data } = await supabase.from('messages')
       .select('*').eq('booking_id', booking.id).order('created_at');
-    setMsgs(data || []);
+    merge((data || []) as Msg[]);
     setLoad(false);
   };
 
@@ -94,18 +108,29 @@ export default function Chat({
     photoUrls(paths).then(setUrls);
   }, [msgs]);
 
-  // live updates while the sheet is open
+  /**
+   * Subscribed whether or not the sheet is open.
+   *
+   * It used to subscribe only while open, so the unread badge on the
+   * trigger never moved: the other side wrote, and you had no idea until
+   * the screen was rebuilt. Listening to every change rather than only
+   * INSERT also means read receipts arrive live — their tick turns when
+   * they actually read it, not when you next reopen the thread.
+   */
   useEffect(() => {
-    if (!open) return;
-    load();
     const ch = supabase
       .channel(`msgs-${booking.id}`)
       .on('postgres_changes',
-        { event:'INSERT', schema:'public', table:'messages', filter:`booking_id=eq.${booking.id}` },
-        payload => setMsgs(prev => [...prev, payload.new as Msg]))
+        { event:'*', schema:'public', table:'messages',
+          filter:`booking_id=eq.${booking.id}` },
+        payload => { if (payload.new) merge([payload.new as Msg]); })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, [open, booking.id]);
+  }, [booking.id]);
+
+  /* Opening the thread is still the right moment to catch up on anything
+     the socket missed while it was down. */
+  useEffect(() => { if (open) load(); }, [open]);
 
   // mark the other side's messages read
   useEffect(() => {
@@ -150,7 +175,12 @@ export default function Chat({
       }
     }
 
-    const { error } = await supabase.from('messages').insert({
+    /* Ask for the stored row back and put it on screen ourselves. The
+       list used to wait for realtime to echo it, so your own message sat
+       invisible until then — and if the socket was down it never showed
+       at all, which read as "the app is broken" rather than "the network
+       is slow". merge() dedupes the echo when it does arrive. */
+    const { data: inserted, error } = await supabase.from('messages').insert({
       booking_id: booking.id,
       sender_id: myId,
       sender_role: role,
@@ -160,7 +190,7 @@ export default function Chat({
       image_h: pending?.height ?? null,
       flagged: scan.flagged,
       flag_reasons: scan.flagged ? scan.reasons : null,
-    });
+    }).select().single();
 
     setBusy(false);
     if (error) {
@@ -168,6 +198,7 @@ export default function Chat({
       setSendErr('That did not send. Try again.');
       return;
     }
+    if (inserted) merge([inserted as Msg]);
 
     setText('');
     if (pending) URL.revokeObjectURL(pending.preview);

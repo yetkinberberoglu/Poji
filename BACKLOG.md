@@ -1,6 +1,6 @@
 # Poji — açık işler
 
-Son güncelleme: 10 Ekim 2026 akşamı.
+Son güncelleme: 11 Ekim 2026 akşamı.
 
 ---
 
@@ -49,6 +49,67 @@ Saatlik ücretin servis başına olması işi 5 adımlıydı, üçü bitti:
 ---
 
 ## Sırada bekleyenler
+
+### 0. TELEFON DOĞRULAMA KAYIT AKIŞINI KESİYOR
+**Öncelik: durdurucu. Bundan önce yapılacak hiçbir şey yok.**
+
+11 Ekim akşamı gerçek bir telefonda denendi (Yetkin'in eşi, müşteri olarak):
+e-posta onayı çalıştı → tekrar giriş istendi, girdi → uygulama telefon numarası
+istedi, girdi → **telefon onay kodu istedi, WhatsApp'tan da SMS'ten de kod
+gelmedi.** Kayıt orada bitti. Yani bugün itibarıyla **hiçbir yeni müşteri
+kaydını tamamlayamıyor.**
+
+İki ayrı delik, ikisi de aynı eksikten:
+
+**a) Müşteri tarafı — kod gönderen bir şey yok.**
+`sn/index.ts` içinde 21 mesaj şablonu var (`new_job_offer`, `job_in_pool`,
+`booking_confirmed` …) ve **hiçbiri doğrulama kodu değil.** Yani ya ekran
+Supabase'in kendi telefon kimlik doğrulamasını (`auth.updateUser({ phone })`)
+çağırıyor ve Supabase projesinde SMS sağlayıcısı tanımlı değil, ya da hiç var
+olmayan bir uca bağlanıyor. İkisinde de sonuç aynı: kod yok.
+
+**b) Sağlayıcı tarafı — telefon alanı hiç yok.**
+`(provider)/profile.tsx` telefon numarası sormuyor. Ama `send-notification`
+WhatsApp göndermek için `cleaner_profiles.phone`'u okuyor. Numara yoksa
+`notifications` satırı `status='failed', error='No phone number on file'`
+olarak yazılıyor ve tedarikçi işten **haberdar olmuyor**. "You'll get a
+WhatsApp the moment something comes up" diyen ekran (`(provider)/jobs.tsx`)
+tutamayacağı bir söz veriyor.
+
+**Karar: telefon doğrulaması kaydı engellememeli.** Numara, sipariş
+verildiğinde lazım — tedarikçi müşteriye ulaşabilsin diye. Kayıt anında
+lazım değil. Doğru sıra:
+
+1. **Bu akşam:** doğrulama adımını atlanabilir yap. Numarayı al,
+   `phone_verified = false` olarak kaydet, kullanıcıyı içeri al. Kayıt bir
+   daha kimsenin önünde kapanmasın.
+2. **Sonra:** doğrulamayı ilk siparişe taşı — numara gerçekten o anda lazım.
+3. **Sağlayıcı profiline telefon alanı** ekle, zorunlu olsun; yoksa iş
+   bildirimi gidemiyor.
+4. **SMS/WhatsApp kanalına karar ver** (aşağıdaki 0b).
+
+Gereken dosya: `app/client-setup.tsx` (henüz görülmedi).
+
+### 0b. WhatsApp bildirimi canlıda büyük olasılıkla hiç gitmiyor
+**Öncelik: durdurucu.** `sn/index.ts`'de `TWILIO_WHATSAPP_FROM` örneği
+`whatsapp:+14155238886` — bu Twilio'nun **sandbox** numarası. Sandbox'ta
+alıcının önce o numaraya elle `join <kod>` yazması gerekiyor ve 24 saatlik
+pencere var. Business API'ye geçildiğinde de ikinci duvar: müşteri yazmadıysa
+serbest metin gönderilemez, sadece Meta'nın onayladığı **template**
+gönderilebilir — "🔔 New job for you, 📍 Sliema, 💶 €96" onaylı bir şablona
+oturtulmazsa Twilio reddeder.
+
+Bu iş modelinin tam merkezinde: tedarikçi işi saniyeler içinde öğrenmezse
+müşteri bekler ve gider. Üç kanal birlikte olmalı:
+
+| Kanal | Durum | Not |
+|---|---|---|
+| WhatsApp (Twilio) | kod var, sandbox şüphesi | asıl çözüm, Meta template onayı birkaç gün |
+| SMS | **hiç yok** | template derdi yok, anında çalışır, mesaj başına ücret |
+| Web push | kod var (`lib/push.ts`, `PushSettings.tsx`) | bedava, ama kullanıcı uygulamayı kurup izin vermiş olmalı |
+
+Gerçeği `notifications` tablosu söylüyor — her deneme `queued`/`sent`/`failed`
+ve hata metniyle oraya yazılıyor. Önce o okunacak.
 
 ### 1. Mesajlaşma anlık değil, okundu bilgisi yok
 **Öncelik: yüksek.** Realtime abonelik (`lib/quotes.ts`'teki `watchQuotes` deseni hazır), `messages.read_at`, okunmamış sayacı, tek/çift tik. Supabase'de `messages` tablosu için realtime yayının açık olduğunu kontrol et.
