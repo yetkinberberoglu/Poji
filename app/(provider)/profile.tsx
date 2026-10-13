@@ -1046,6 +1046,23 @@ export default function ProviderProfile() {
         <Text style={s.chev}>›</Text>
       </TouchableOpacity>
 
+      {/* A provider is allowed to be a client too — in a market this size
+          the plumber genuinely needs a cleaner. Until now there was no
+          door here, only the absence of a wall: people wandered into the
+          client screens by accident and met an address step with nothing
+          in it, because they had no client record at all. One deliberate
+          way in is better than a gap nobody meant to leave. */}
+      <Text style={s.sectionTitle}>Hiring someone yourself</Text>
+
+      <TouchableOpacity style={s.linkRow} onPress={()=>router.push('/(tabs)/home')}>
+        <Text style={s.linkIcon}>🛎</Text>
+        <View style={{flex:1}}>
+          <Text style={s.linkTitle}>Book a service</Text>
+          <Text style={s.linkSub}>Hire another provider on Poji, as a customer</Text>
+        </View>
+        <Text style={s.chev}>›</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity style={s.signOut} onPress={signOut}>
         <Text style={s.signOutTxt}>Sign Out</Text>
       </TouchableOpacity>

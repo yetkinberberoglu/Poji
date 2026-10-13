@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, ActivityIndicator, Modal, Image, Dimensions
+  ScrollView, ActivityIndicator, Modal, Image, Dimensions, Platform
 } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { C, S } from '../constants/theme';
@@ -225,6 +225,12 @@ export default function Chat({
     setTimeout(()=>scroller.current?.scrollToEnd({ animated:true }), 120);
   };
 
+  /* One answer to "is there anything to send", used by the button and by
+     the Enter key. Two copies of this condition is how a keyboard
+     shortcut ends up firing on an empty box, or staying dead while the
+     button next to it is live. */
+  const canSend = (!!text.trim() || !!pending) && !busy;
+
   return (
     <>
       <TouchableOpacity style={s.trigger} onPress={()=>setOpen(true)}>
@@ -423,10 +429,26 @@ export default function Chat({
               placeholder={pending ? 'Add a note (optional)' : 'Write a message'}
               placeholderTextColor={C.muted}
               multiline
+              blurOnSubmit={false}
+              /* Enter sends; Shift+Enter starts a new line.
+                 The box is multiline, so the browser's default for Enter
+                 was a line break - every message needed a trip to the
+                 Send button, and anyone who typed and pressed Enter
+                 watched their message sit there looking unsent. On a
+                 phone the Return key should still break the line, so
+                 this is web only. */
+              onKeyPress={(e: any) => {
+                if (Platform.OS !== 'web') return;
+                const key   = e?.nativeEvent?.key      ?? e?.key;
+                const shift = e?.nativeEvent?.shiftKey ?? e?.shiftKey;
+                if (key !== 'Enter' || shift) return;
+                e?.preventDefault?.();
+                if (canSend) send();
+              }}
             />
             <TouchableOpacity
-              style={[s.sendBtn, ((!text.trim() && !pending)||busy) && s.sendDis]}
-              disabled={(!text.trim() && !pending)||busy}
+              style={[s.sendBtn, !canSend && s.sendDis]}
+              disabled={!canSend}
               onPress={send}>
               {busy ? <ActivityIndicator color={C.white} size="small" />
                 : <Text style={s.sendTxt}>Send</Text>}

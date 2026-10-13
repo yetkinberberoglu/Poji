@@ -108,6 +108,23 @@ export default function BookingScreen() {
   const [savedAddr, setSavedAddr] = useState<{line:string; locality:string}|null>(null);
   const [useSaved, setUseSaved]   = useState(true);
   const [loadingAddr, setLoadingAddr] = useState(true);
+  /* Who is doing the booking. A provider is allowed to be a client — in a
+     market this small the plumber genuinely needs a cleaner — but the one
+     thing they must not be is their own client. A self-booking is a job
+     count and a five-star review that cost nothing to manufacture, and
+     that is the shortest route to a ratings system nobody believes. */
+  const [myId, setMyId] = useState<string|null>(null);
+  /* Whether a client row exists at all, which is different from whether it
+     has an address. A provider has no client row until the first time they
+     book something, and that is the row this screen creates. */
+  const [hasClientRow, setHasClientRow] = useState(false);
+  /* What the provider already told us during their own setup. Offered as a
+     choice, never assumed: a registered address can be a workshop. */
+  const [prov, setProv] = useState<{
+    line:string; locality:string; firstName:string; lastName:string;
+    phone:string; phoneOk:boolean;
+  }|null>(null);
+  const [useProv, setUseProv] = useState(false);
   const [num, setNum]   = useState(1);
   const [pickedCleaner, setPicked] = useState<string|null>(params.providerId || null);
   const [lockedToCleaner, setLocked] = useState<boolean>(!!params.providerId);
@@ -236,6 +253,7 @@ export default function BookingScreen() {
      inside it. */
   const jobLocality = (() => {
     if (useSaved && savedAddr?.locality) return savedAddr.locality.trim();
+    if (useProv  && prov?.locality)      return prov.locality.trim();
     const a = (address || '').toLowerCase();
     if (!a) return '';
     const hit = [...ALL_LOCALITIES]
@@ -263,15 +281,26 @@ export default function BookingScreen() {
     return areas.some(a => String(a).trim().toLowerCase() === jobLocality.toLowerCase());
   };
 
+  /* Applied before everything else, including the head counts, so that a
+     provider is never offered to themselves and never counted as one of
+     the people available for their own job. */
+  const notMe = (c: any) => !myId || c.id !== myId;
+
   /* Kept apart so the empty state can tell "nobody does this work" from
      "three people do, none of them here". */
   const inTrade = cleaners
+    .filter(notMe)
     .filter(offersService)
     .filter(c => flat || isQuote || teamSizeOf(c) >= num);
   const allCapable = inTrade.filter(coversArea);
   const capable = lockedToCleaner
     ? allCapable.filter(c => c.id === params.providerId)
     : allCapable;
+
+  /* A provider who opened their own profile and pressed Book. The list is
+     empty for an honest reason, so the empty state should say which one
+     rather than leave them reading "Nobody available" about themselves. */
+  const bookingSelf = !!myId && !!params.providerId && params.providerId === myId;
 
   const lockedCleaner  = cleaners.find(c => c.id === params.providerId) || null;
   const lockedCapacity = lockedCleaner ? teamSizeOf(lockedCleaner) : 0;
@@ -525,14 +554,38 @@ export default function BookingScreen() {
     (async () => {
       const { data:{ user } } = await supabase.auth.getUser();
       if (!user) { setLoadingAddr(false); return; }
+      setMyId(user.id);
       const { data } = await supabase
         .from('client_profiles').select('default_address, default_locality')
         .eq('id', user.id).maybeSingle();
+      setHasClientRow(!!data);
       if (data?.default_address) {
         setSavedAddr({ line: data.default_address, locality: data.default_locality || '' });
         setAddr(`${data.default_address}${data.default_locality ? ', ' + data.default_locality : ''}`);
         setUseSaved(true);
-      } else setUseSaved(false);
+        setLoadingAddr(false);
+        return;
+      }
+
+      /* No address on the client side. If this person is a provider, they
+         gave us one during their own setup, along with their name and
+         phone - and being made to type all of it again is precisely the
+         complaint that got provider onboarding rebuilt. So fetch it and
+         offer it. A client has no row here, so nothing changes for them. */
+      setUseSaved(false);
+      const { data: p } = await supabase
+        .from('cleaner_profiles')
+        .select('first_name, last_name, phone, phone_verified, address, locality')
+        .eq('id', user.id).maybeSingle();
+      if (p?.address) {
+        setProv({
+          line: p.address, locality: p.locality || '',
+          firstName: p.first_name || '', lastName: p.last_name || '',
+          phone: p.phone || '', phoneOk: !!p.phone_verified,
+        });
+        setUseProv(true);
+        setAddr(`${p.address}${p.locality ? ', ' + p.locality : ''}`);
+      }
       setLoadingAddr(false);
     })();
   }, []);
@@ -575,6 +628,40 @@ export default function BookingScreen() {
 
   const toggleExtra = (id: string) =>
     setChosen(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
+
+  /**
+   * A client row for somebody booking who does not have one yet.
+   *
+   * The booking itself does not need it — bookings.client_id points at
+   * profiles, not here — which is exactly why its absence went unnoticed.
+   * Everything that looks the client *up* comes here: the provider taking
+   * the job reads the name from client_profiles and sees "the client" when
+   * the row is missing, and the next booking asks for the address again
+   * from scratch.
+   *
+   * Written once, from what the person has already told us, at the moment
+   * they actually book something. onboarding_done stays false on purpose:
+   * this is a working row, not a claim that they finished client setup.
+   * Best-effort — a booking that went through is not undone because the
+   * bookkeeping behind it did not.
+   */
+  const ensureClientRow = async (line: string, locality: string) => {
+    if (hasClientRow || !myId) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error } = await supabase.from('client_profiles').insert({
+      id: myId,
+      first_name: prov?.firstName || null,
+      last_name:  prov?.lastName  || null,
+      phone:      prov?.phone     || null,
+      phone_verified: !!prov?.phoneOk,
+      email: user?.email || null,
+      email_verified: !!user?.email_confirmed_at,
+      default_address:  line     || null,
+      default_locality: locality || null,
+    });
+    if (error) { console.log('client row:', error.message); return; }
+    setHasClientRow(true);
+  };
 
   const confirm = async () => {
     if (!cleaner || !svcType) return;
@@ -628,6 +715,21 @@ export default function BookingScreen() {
         total,
         isQuote,
       });
+
+      /* After the success screen rather than before it. This is
+         bookkeeping: it should not add a round trip to the thing the
+         person is sitting there waiting for. A transport job has no
+         address of its own — "Sliema → Mosta" is a route, not somewhere
+         to send a cleaner next time — so nothing is saved as a default. */
+      if (!isTransport) {
+        const line = useSaved ? savedAddr?.line
+                   : useProv  ? prov?.line
+                   : address;
+        const loc  = useSaved ? savedAddr?.locality
+                   : useProv  ? prov?.locality
+                   : jobLocality;
+        ensureClientRow((line || '').trim(), (loc || '').trim()).catch(()=>{});
+      }
     } catch (e: any) {
       // Alert.alert does nothing on web, so say it on the page instead
       console.error('Booking failed:', e);
@@ -694,17 +796,36 @@ export default function BookingScreen() {
               </View>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[s.addrCard, !useSaved&&s.addrCardOn]}
-            onPress={()=>{ setUseSaved(false); if (savedAddr) setAddr(''); }}>
-            <View style={[s.radio, !useSaved&&s.radioOn]}>
-              {!useSaved && <View style={s.radioDot}/>}
+          {/* The address this person gave us as a provider. Labelled as
+              that and not as "home", because it may well be a workshop -
+              and offered rather than filled in silently, since where
+              somebody works is not where they want a cleaner. */}
+          {!savedAddr && prov && (
+            <TouchableOpacity style={[s.addrCard, useProv&&s.addrCardOn]}
+              onPress={()=>{ setUseProv(true);
+                setAddr(`${prov.line}${prov.locality?', '+prov.locality:''}`); }}>
+              <View style={[s.radio, useProv&&s.radioOn]}>
+                {useProv && <View style={s.radioDot}/>}
+              </View>
+              <View style={{flex:1}}>
+                <Text style={s.addrLabel}>🧾  The address on your provider account</Text>
+                <Text style={s.addrLine}>{prov.line}</Text>
+                {!!prov.locality && <Text style={s.addrLocality}>{prov.locality}</Text>}
+              </View>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[s.addrCard, (!useSaved&&!useProv)&&s.addrCardOn]}
+            onPress={()=>{ setUseSaved(false); setUseProv(false);
+              if (savedAddr || prov) setAddr(''); }}>
+            <View style={[s.radio, (!useSaved&&!useProv)&&s.radioOn]}>
+              {(!useSaved&&!useProv) && <View style={s.radioDot}/>}
             </View>
             <View style={{flex:1}}>
               <Text style={s.addrLabel}>📍  A different address</Text>
               <Text style={s.addrHint}>Office, holiday let, a friend's place…</Text>
             </View>
           </TouchableOpacity>
-          {!useSaved && (
+          {!useSaved && !useProv && (
             <TextInput style={[s.input,{marginTop:10}]}
               placeholder="e.g. 12 Tower Road, Sliema" placeholderTextColor={C.muted}
               value={address} onChangeText={setAddr} autoFocus />
@@ -1010,7 +1131,7 @@ export default function BookingScreen() {
                        two who could take this job. */
                     const pool = lockedToCleaner
                       ? (lockedCapacity >= n ? 1 : 0)
-                      : cleaners.filter(offersService).filter(coversArea)
+                      : cleaners.filter(notMe).filter(offersService).filter(coversArea)
                                 .filter(c => teamSizeOf(c) >= n).length;
                     const off = n > 1 && pool === 0;
                     return (
@@ -1248,16 +1369,22 @@ export default function BookingScreen() {
 
             {capable.length === 0 ? (
               <View style={s.emptyBox}>
-                <Text style={s.emptyIcon}>{lockedToCleaner ? '👥' : jobLocality && inTrade.length > 0 ? '📍' : '👥'}</Text>
+                <Text style={s.emptyIcon}>
+                  {bookingSelf ? '🪞' : lockedToCleaner ? '👥' : jobLocality && inTrade.length > 0 ? '📍' : '👥'}
+                </Text>
                 <Text style={s.emptyTxt}>
-                  {lockedToCleaner
+                  {bookingSelf
+                    ? 'That one is you'
+                    : lockedToCleaner
                     ? `${lockedCleaner?.name || 'This provider'} can't cover this`
                     : jobLocality && inTrade.length > 0
                     ? `Nobody covers ${jobLocality} yet`
                     : 'Nobody available'}
                 </Text>
                 <Text style={s.emptySub}>
-                  {jobLocality && inTrade.length > 0 && !lockedToCleaner
+                  {bookingSelf
+                    ? 'You cannot book your own services. Everything else about booking works the same — pick somebody else and carry on.'
+                    : jobLocality && inTrade.length > 0 && !lockedToCleaner
                     ? `${inTrade.length} ${inTrade.length === 1 ? 'provider does' : 'providers do'} this work, but none of them list ${jobLocality} as an area they travel to.`
                     : 'Try a different option for this job.'}
                 </Text>
