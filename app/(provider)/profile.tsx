@@ -106,6 +106,12 @@ export default function ProviderProfile() {
 
   const pendingCount = tradeRows.filter(r => r.status === 'pending').length;
 
+  /* Approved but switched off by them. Still approved - the record is
+     untouched - so turning it back on is one tap with no letter and no
+     queue. What clients see is decided in the database: categories is
+     rebuilt from approved AND not paused. */
+  const pausedCount = tradeRows.filter(r => r.status === 'approved' && r.paused).length;
+
   const myTrades  = approvedIds.map((id:string)=>findTrade(id)).filter(Boolean);
   const hasHourly = myTrades.some((t:any)=>t.pricing === 'hourly');
   const hasRoad   = myTrades.some((t:any)=>t.roadside);
@@ -126,7 +132,13 @@ export default function ProviderProfile() {
       setError('That trade is suspended on your account. Email support and we will look at it.');
       return;
     }
-    if (row.status === 'approved') { setConfirmDrop(row.trade_id); return; }
+    if (row.status === 'approved') {
+      /* Already off: one tap puts it back. Nothing destructive happens
+         in this direction, so it does not need confirming. */
+      if (row.paused) { await setPaused(row.trade_id, false); return; }
+      setConfirmDrop(row.trade_id);
+      return;
+    }
 
     /* Pending is a request you can take back - one tap, nothing to write */
     if (row.status === 'pending') {
@@ -169,6 +181,18 @@ export default function ProviderProfile() {
       setError(e?.message || 'That did not go through');
     }
     setTradeBusy(null);
+  };
+
+  /** Their own switch. Hides the trade from clients, keeps the approval. */
+  const setPaused = async (id: string, paused: boolean) => {
+    setTradeBusy(id); setError('');
+    try {
+      await callRpc('set_trade_paused', { p_trade: id, p_paused: paused });
+      await loadMyTrades();
+    } catch (e:any) {
+      setError(e?.message || 'That did not go through');
+    }
+    setTradeBusy(null); setConfirmDrop(null);
   };
 
   const dropTrade = async (id: string) => {
@@ -326,8 +350,8 @@ export default function ProviderProfile() {
         </View>
       )}
 
-      {['basic','draft','needs_info','rejected'].includes(f.status || 'basic') && (
-        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/provider-setup')}>
+      {(f.status === 'basic' || !f.status) && (
+        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/onboarding')}>
           <Text style={s.verifyIcon}>🪪</Text>
           <View style={{flex:1}}>
             <Text style={s.verifyTitle}>Verify your account</Text>
@@ -453,18 +477,20 @@ export default function ProviderProfile() {
                         key={r.trade_id}
                         disabled={busy}
                         style={[s.pill,
-                          st==='approved'  && s.pillOn,
+                          st==='approved' && !r.paused && s.pillOn,
+                          st==='approved' &&  r.paused && s.pillPaused,
                           st==='pending'   && s.pillWait,
                           st==='rejected'  && s.pillBad,
                           st==='suspended' && s.pillStop,
                           busy && s.saveDis]}
                         onPress={()=>tapTrade(r)}>
                         <Text style={[s.pillTxt,
-                          st==='approved'  && s.pillTxtOn,
+                          st==='approved' && !r.paused && s.pillTxtOn,
+                          st==='approved' &&  r.paused && {color:C.muted},
                           st==='pending'   && {color:C.amber},
                           st==='rejected'  && {color:C.red},
                           st==='suspended' && {color:C.red}]}>
-                          {st==='approved'  ? '✓ ' :
+                          {st==='approved'  ? (r.paused ? '⏸ ' : '✓ ') :
                            st==='pending'   ? '⏳ ' :
                            st==='rejected'  ? '✕ ' :
                            st==='suspended' ? '⛔ ' : ''}
@@ -567,25 +593,52 @@ export default function ProviderProfile() {
             return (
               <View style={s.dropBox}>
                 <Text style={s.dropTitle}>
-                  Stop offering {row?.name || 'this trade'}?
+                  {row?.name || 'This trade'} — switch it off?
                 </Text>
-                <Text style={s.dropTxt}>
-                  You'll stop getting jobs in it and drop off the client list for it.
-                  Asking for it again later means another check.
-                </Text>
-                <View style={s.row2}>
-                  <TouchableOpacity style={s.offCancel} onPress={()=>setConfirmDrop(null)}>
-                    <Text style={s.offCancelTxt}>Keep it</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[s.dropBtn, tradeBusy===confirmDrop&&s.saveDis]}
-                    disabled={tradeBusy===confirmDrop}
-                    onPress={()=>dropTrade(confirmDrop)}>
-                    <Text style={s.dropBtnTxt}>Drop it</Text>
-                  </TouchableOpacity>
-                </View>
+
+                {/* Two different things, and the reversible one goes
+                    first. Before this there was only the permanent
+                    choice, so "not this season" cost you the approval
+                    and a second letter to get it back. */}
+                <TouchableOpacity
+                  style={[s.pauseBtn, tradeBusy===confirmDrop&&s.saveDis]}
+                  disabled={tradeBusy===confirmDrop}
+                  onPress={()=>setPaused(confirmDrop, true)}>
+                  <Text style={s.pauseBtnTxt}>⏸  Pause it for now</Text>
+                  <Text style={s.pauseBtnSub}>
+                    Off the client list and no more jobs in it. You keep the
+                    approval, and one tap brings it back — no letter, no waiting.
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[s.dropWide, tradeBusy===confirmDrop&&s.saveDis]}
+                  disabled={tradeBusy===confirmDrop}
+                  onPress={()=>dropTrade(confirmDrop)}>
+                  <Text style={s.dropWideTxt}>Drop it for good</Text>
+                  <Text style={s.dropWideSub}>
+                    The approval goes too. Asking for it again means another letter
+                    and another check.
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={s.offCancel} onPress={()=>setConfirmDrop(null)}>
+                  <Text style={s.offCancelTxt}>Leave it on</Text>
+                </TouchableOpacity>
               </View>
             );
           })()}
+
+          {pausedCount > 0 && (
+            <View style={s.pauseNote}>
+              <Text style={s.pauseNoteTxt}>
+                ⏸  {pausedCount === 1 ? 'One trade is' : `${pausedCount} trades are`}
+                {' '}switched off, so clients cannot see
+                {' '}{pausedCount === 1 ? 'it' : 'them'}. Tap to turn
+                {' '}{pausedCount === 1 ? 'it' : 'them'} back on whenever you like.
+              </Text>
+            </View>
+          )}
 
           {pendingCount > 0 && (
             <View style={s.waitNote}>
@@ -1126,6 +1179,21 @@ const s = StyleSheet.create({
     alignItems:'center'},
   dropBtnTxt:{fontSize:13,fontWeight:'700',color:C.white},
 
+  /* The reversible choice reads as the normal one: white card, primary
+     border. The permanent one is plainer and sits below it. */
+  pauseBtn:{backgroundColor:C.white,borderRadius:12,padding:13,marginTop:4,
+    borderWidth:1.5,borderColor:C.primary,gap:3},
+  pauseBtnTxt:{fontSize:14,fontWeight:'800',color:C.primary},
+  pauseBtnSub:{fontSize:12,color:C.muted,lineHeight:17},
+  dropWide:{backgroundColor:C.white,borderRadius:12,padding:13,marginTop:8,
+    borderWidth:1,borderColor:'#FECACA',gap:3},
+  dropWideTxt:{fontSize:14,fontWeight:'800',color:C.red},
+  dropWideSub:{fontSize:12,color:C.muted,lineHeight:17},
+  pillPaused:{backgroundColor:C.bgAlt,borderColor:C.border},
+  pauseNote:{backgroundColor:C.bgAlt,borderRadius:12,padding:12,marginTop:12,
+    borderWidth:1,borderColor:C.border},
+  pauseNoteTxt:{fontSize:12,color:C.muted,lineHeight:18},
+
   checkRow:{flexDirection:'row',alignItems:'center',gap:12,padding:13,borderRadius:12,
     borderWidth:1.5,borderColor:C.border,backgroundColor:C.bg,marginTop:8},
   check:{width:22,height:22,borderRadius:7,borderWidth:2,borderColor:C.border,
@@ -1156,7 +1224,8 @@ const s = StyleSheet.create({
   offForm:{backgroundColor:C.bg,borderRadius:12,padding:12,marginTop:10,
     borderWidth:1,borderColor:C.border},
   offCancel:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:11,
-    paddingVertical:11,alignItems:'center',backgroundColor:C.white},
+    paddingVertical:11,alignItems:'center',backgroundColor:C.white,
+    alignSelf:'stretch',marginTop:8},
   offCancelTxt:{fontSize:13,fontWeight:'600',color:C.muted},
   offSave:{flex:1.4,backgroundColor:C.primary,borderRadius:11,paddingVertical:11,
     alignItems:'center'},

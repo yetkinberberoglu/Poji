@@ -27,6 +27,8 @@ type Req = {
   requires_proof: boolean; proof_label: string | null;
   documents: string[] | null;
   status: string; requested_at: string; note: string | null;
+  paused: boolean | null; paused_at: string | null;
+  decided_at: string | null;
   reason: { years?: string; letter?: string } | null;
   held_trades: string[] | null;
 };
@@ -65,10 +67,35 @@ export default function AdminTrades() {
   const [rejectFor, setReject]  = useState<string|null>(null);
   const [rejectWhy, setWhy]     = useState('');
 
+  /* Trades already granted. categories no longer lists the paused ones
+     - that is the point of pausing - so an admin looking at a provider
+       elsewhere in the panel cannot see a switched-off trade at all.
+       This is where it is visible, and where it can be switched for
+       someone who rang up and asked. */
+  const [live, setLive]       = useState<Req[]>([]);
+  const [pauseBusy, setPBusy] = useState<string|null>(null);
+
   const loadReqs = async () => {
     const { data, error: e } = await supabase.rpc('trade_requests', { p_status: 'pending' });
     if (e) { setError(e.message); return; }
     setReqs((data || []) as Req[]);
+  };
+
+  const loadLive = async () => {
+    const { data, error: e } = await supabase.rpc('trade_requests', { p_status: 'approved' });
+    if (e) { setError(e.message); return; }
+    setLive((data || []) as Req[]);
+  };
+
+  const setPaused = async (r: Req, paused: boolean) => {
+    const key = `${r.provider_id}:${r.trade_id}`;
+    setPBusy(key); setError('');
+    const { error: e } = await supabase.rpc('set_trade_paused', {
+      p_trade: r.trade_id, p_paused: paused, p_provider: r.provider_id,
+    });
+    setPBusy(null);
+    if (e) { setError(e.message); return; }
+    await loadLive();
   };
 
   const decide = async (r: Req, approve: boolean, note?: string) => {
@@ -84,6 +111,7 @@ export default function AdminTrades() {
     if (e) { setError(e.message); return; }
     setReject(null); setWhy('');
     await loadReqs();
+    await loadLive();
   };
 
   const load = async () => {
@@ -98,7 +126,7 @@ export default function AdminTrades() {
     setLoad(false);
   };
 
-  useEffect(() => { load(); loadReqs(); }, []);
+  useEffect(() => { load(); loadReqs(); loadLive(); }, []);
 
   const checkUsage = async (id: string) => {
     const { data } = await supabase.rpc('trade_usage', { p_trade: id });
@@ -546,7 +574,64 @@ export default function AdminTrades() {
           </View>
         )}
 
+        {/* ── trades already granted, and whether they are switched on ── */}
+        {live.length > 0 && (() => {
+          /* Grouped by provider, because the question an admin has is
+             "what does this person do", not "who does tiling". */
+          const byProvider: Record<string, Req[]> = {};
+          live.forEach(r => { (byProvider[r.provider_id] ||= []).push(r); });
+          const offCount = live.filter(r => r.paused).length;
 
+          return (
+            <View style={s.liveBox}>
+              <Text style={s.liveTitle}>Granted trades</Text>
+              <Text style={s.liveHint}>
+                A provider switches these on and off themselves. You can do it for
+                one who asks — it hides the trade from clients and stops their jobs
+                in it, and the approval stays, so turning it back on is instant.
+                {offCount > 0
+                  ? `  ${offCount} ${offCount === 1 ? 'is' : 'are'} off right now.`
+                  : ''}
+              </Text>
+              <Text style={s.liveHint}>
+                To take a trade away rather than switch it off, suspend it — that is
+                the one a provider cannot undo.
+              </Text>
+
+              {Object.keys(byProvider).map(pid => {
+                const rows = byProvider[pid];
+                const who  = `${rows[0].first_name || ''} ${rows[0].last_name || ''}`.trim()
+                             || 'Provider';
+                return (
+                  <View key={pid} style={s.liveCard}>
+                    <Text style={s.liveWho}>{who}</Text>
+                    {rows.map(r => {
+                      const key = `${r.provider_id}:${r.trade_id}`;
+                      const b2  = pauseBusy === key;
+                      const off = !!r.paused;
+                      return (
+                        <View key={key} style={s.liveRow}>
+                          <Text style={[s.liveTrade, off && {color:C.muted}]}>
+                            {off ? '⏸  ' : '✓  '}{r.icon}  {r.trade_name}
+                          </Text>
+                          <TouchableOpacity
+                            style={[off ? s.onBtn : s.offBtn, b2 && s.dis]}
+                            disabled={b2}
+                            onPress={()=>setPaused(r, !off)}>
+                            {b2 ? <ActivityIndicator color={off ? C.white : C.muted} size="small"/>
+                              : <Text style={off ? s.onBtnTxt : s.offBtnTxt}>
+                                  {off ? 'Turn on' : 'Switch off'}
+                                </Text>}
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })()}
 
         {/* A brand new one has no row to sit under, so it opens here where
             the buttons that create it are. */}
@@ -696,6 +781,23 @@ const s = StyleSheet.create({
     alignItems:'center'},
   saveTxt:{fontSize:13,fontWeight:'700',color:C.white},
   dis:{opacity:0.5},
+
+  liveBox:{backgroundColor:C.white,borderRadius:16,padding:14,marginBottom:18,
+    borderWidth:1,borderColor:C.border,gap:6},
+  liveTitle:{fontSize:15,fontWeight:'800',color:C.dark},
+  liveHint:{fontSize:12,color:C.muted,lineHeight:17},
+  liveCard:{backgroundColor:C.bg,borderRadius:12,padding:12,marginTop:8,gap:6,
+    borderWidth:1,borderColor:C.border},
+  liveWho:{fontSize:13,fontWeight:'800',color:C.dark},
+  liveRow:{flexDirection:'row',alignItems:'center',gap:10},
+  liveTrade:{flex:1,fontSize:13,fontWeight:'600',color:C.text},
+  offBtn:{borderWidth:1.5,borderColor:C.border,borderRadius:10,
+    paddingHorizontal:12,paddingVertical:7,backgroundColor:C.white,minWidth:92,
+    alignItems:'center'},
+  offBtnTxt:{fontSize:12,fontWeight:'700',color:C.muted},
+  onBtn:{backgroundColor:C.green,borderRadius:10,paddingHorizontal:12,
+    paddingVertical:7,minWidth:92,alignItems:'center'},
+  onBtnTxt:{fontSize:12,fontWeight:'700',color:C.white},
 
   queue:{backgroundColor:C.amberLt,borderRadius:16,padding:14,marginBottom:18,
     gap:8,borderWidth:1.5,borderColor:'#FDE68A'},
