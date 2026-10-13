@@ -486,7 +486,7 @@ export default function ProviderProfile() {
                         onPress={()=>tapTrade(r)}>
                         <Text style={[s.pillTxt,
                           st==='approved' && !r.paused && s.pillTxtOn,
-                          st==='approved' &&  r.paused && {color:C.muted},
+                          st==='approved' &&  r.paused && {color:C.primary},
                           st==='pending'   && {color:C.amber},
                           st==='rejected'  && {color:C.red},
                           st==='suspended' && {color:C.red}]}>
@@ -495,6 +495,10 @@ export default function ProviderProfile() {
                            st==='rejected'  ? '✕ ' :
                            st==='suspended' ? '⛔ ' : ''}
                           {r.icon}  {r.name}
+                          {/* The pill IS the switch, so it has to say so.
+                              Grey and quiet reads as disabled, not as
+                              "tap me" - which is exactly how it was read. */}
+                          {st==='approved' && r.paused ? '   ·  Turn on' : ''}
                           {r.requires_proof && st!=='approved' ? '  📄' : ''}
                         </Text>
                       </TouchableOpacity>
@@ -1189,7 +1193,9 @@ const s = StyleSheet.create({
     borderWidth:1,borderColor:'#FECACA',gap:3},
   dropWideTxt:{fontSize:14,fontWeight:'800',color:C.red},
   dropWideSub:{fontSize:12,color:C.muted,lineHeight:17},
-  pillPaused:{backgroundColor:C.bgAlt,borderColor:C.border},
+  /* Dashed and primary-tinted: off, but plainly something you can
+     press. A flat grey pill was read as disabled. */
+  pillPaused:{backgroundColor:C.white,borderColor:C.primary,borderStyle:'dashed'},
   pauseNote:{backgroundColor:C.bgAlt,borderRadius:12,padding:12,marginTop:12,
     borderWidth:1,borderColor:C.border},
   pauseNoteTxt:{fontSize:12,color:C.muted,lineHeight:18},
