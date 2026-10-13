@@ -142,7 +142,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [userRole,  setUserRole]  = useState('client');
   const [userName,  setUserName]  = useState('');
   const [userId,    setUserId]    = useState('');
-  const [myCategories, setMyCats] = useState<string[]>(['cleaning']);
+  /* Empty, not cleaning. A provider with no approved trade should be
+     offered no work - inventing one for them put plumbers on cleaning
+     jobs and showed a trade nobody picked on their own dashboard. */
+  const [myCategories, setMyCats] = useState<string[]>([]);
 
   const loadCleaners = async () => {
     // providers_public is the safe half of cleaner_profiles — no IBAN,
@@ -180,7 +183,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         bringsOwnSupplies: !!c.brings_own_supplies,
         teamType: c.team_type || 'solo',
         teamSize: Number(c.team_size) || 1,
-        categories: (c.categories && c.categories.length) ? c.categories : ['cleaning'],
+        /* No fabricated trade. The column is derived from approved
+           provider_trades rows by a trigger, so empty means exactly
+           that: nothing approved yet. Filling it in here is how a
+           provider who picked four trades came back as a cleaner. */
+        categories: c.categories || [],
         acceptsUrgent: !!c.accepts_urgent,
         serviceRadiusKm: Number(c.service_radius_km) || 15,
         photoPath: c.profile_photo_url || null,
@@ -240,7 +247,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (data?.role === 'cleaner') {
       const { data: prof } = await supabase
         .from('cleaner_profiles').select('categories').eq('id', user.id).maybeSingle();
-      if (prof?.categories?.length) setMyCats(prof.categories);
+      /* Assigned even when empty, so dropping a trade actually clears
+         it rather than leaving the last non-empty list in place. */
+      setMyCats(prof?.categories || []);
     }
   };
 

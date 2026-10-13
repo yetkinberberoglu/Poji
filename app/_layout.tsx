@@ -45,6 +45,7 @@ export default function RootLayout() {
         <Stack.Screen name="payout" />
         <Stack.Screen name="my-services" />
         <Stack.Screen name="onboarding" />
+        <Stack.Screen name="provider-setup" />
         <Stack.Screen name="admin" />
         <Stack.Screen name="admin-trades" />
         <Stack.Screen name="(tabs)" />

@@ -326,8 +326,8 @@ export default function ProviderProfile() {
         </View>
       )}
 
-      {(f.status === 'basic' || !f.status) && (
-        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/onboarding')}>
+      {['basic','draft','needs_info','rejected'].includes(f.status || 'basic') && (
+        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/provider-setup')}>
           <Text style={s.verifyIcon}>🪪</Text>
           <View style={{flex:1}}>
             <Text style={s.verifyTitle}>Verify your account</Text>

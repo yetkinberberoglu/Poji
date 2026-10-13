@@ -1,154 +1,176 @@
-// Sends and checks a 6-digit code over WhatsApp.
+// Supabase Edge Function — telefon dogrulama, Twilio Verify uzerinden SMS.
 // Deploy:  supabase functions deploy verify-phone
+//
+// Neden SMS, neden WhatsApp degil:
+// Yeni kaydolan biri tanimi geregi bize hic yazmamistir, ve WhatsApp
+// musteri yazmadan serbest metin gondermeye izin vermez. Yani dogrulama,
+// WhatsApp'in en yasakladigi durumdur. Ustelik WhatsApp'tan gonderirsek
+// "bu numarada WhatsApp var mi" sorusunu dogrulamis oluruz, numarayi degil.
+//
+// Neden Twilio Verify, neden kendi kodumuz degil:
+// Kodun uretimi, suresi, deneme limiti ve kilitlenmesi guvenlik islerdir.
+// Verify bunlari yonetiyor ve biz hicbir kod saklamiyoruz — saklamadigin
+// sey sizdiramaz.
+//
+// Gereken secret'lar:
+//   TWILIO_ACCOUNT_SID
+//   TWILIO_AUTH_TOKEN
+//   TWILIO_VERIFY_SERVICE_SID   <- yeni, VA... ile baslar
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const TWILIO_SID   = Deno.env.get('TWILIO_ACCOUNT_SID')!;
-const TWILIO_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN')!;
-const TWILIO_FROM  = Deno.env.get('TWILIO_WHATSAPP_FROM')!;
+const TWILIO_SID     = Deno.env.get('TWILIO_ACCOUNT_SID')!;
+const TWILIO_TOKEN   = Deno.env.get('TWILIO_AUTH_TOKEN')!;
+const VERIFY_SERVICE = Deno.env.get('TWILIO_VERIFY_SERVICE_SID')!;
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-const cors = {
+const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const CODE_TTL_MIN   = 10;
-const MAX_ATTEMPTS   = 5;
-const RESEND_WAIT_S  = 60;
+const reply = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
 
-async function sha256(text: string) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+/**
+ * Malta numarasina cevirir. Istemci tarafi zaten dogruluyor, ama istemciye
+ * guvenmek diye bir sey yok: buraya gelen her sey yeniden kontrol edilir.
+ */
+function normalise(raw: string): string | null {
+  const cleaned = String(raw || '').replace(/[^\d+]/g, '');
+  if (!cleaned) return null;
+  // Basinda + yoksa ve 8 haneli ise Malta kabul et (79xxxxxx, 99xxxxxx)
+  const e164 = cleaned.startsWith('+')
+    ? cleaned
+    : cleaned.length === 8 ? `+356${cleaned}` : `+${cleaned}`;
+  // E.164: + ve 8-15 hane
+  return /^\+[1-9]\d{7,14}$/.test(e164) ? e164 : null;
 }
 
-async function sendWhatsApp(to: string, body: string) {
-  const form = new URLSearchParams({ From: TWILIO_FROM, To: `whatsapp:${to}`, Body: body });
+async function twilioVerify(path: string, form: Record<string, string>) {
   const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
+    `https://verify.twilio.com/v2/Services/${VERIFY_SERVICE}/${path}`,
     {
       method: 'POST',
       headers: {
         'Authorization': 'Basic ' + btoa(`${TWILIO_SID}:${TWILIO_TOKEN}`),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: form.toString(),
-    }
+      body: new URLSearchParams(form).toString(),
+    },
   );
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.message || 'Twilio error');
-  return json.sid as string;
+  return { ok: res.ok, status: res.status, json: await res.json() };
 }
 
-const reply = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status, headers: { ...cors, 'Content-Type': 'application/json' },
-  });
+/** Twilio'nun hata kodlarini kullaniciya soylenebilir bir cumleye cevirir. */
+function friendly(code: number | undefined, fallback: string) {
+  switch (code) {
+    case 60200: return { error: 'That number does not look right. Check it and try again.' };
+    case 60203: return { error: 'Too many codes sent to that number. Try again in a few minutes.', retryIn: 300 };
+    case 60202: return { error: 'Too many wrong codes. Ask for a new one.', retryIn: 60 };
+    case 60205: return { error: 'We cannot send SMS to that number.' };
+    case 20404: return { error: 'That code has expired. Ask for a new one.' };
+    case 60212: return { error: 'Too many attempts from this number. Try again later.', retryIn: 600 };
+    default:    return { error: fallback };
+  }
+}
+
+/**
+ * Hangi tabloda duruyor? Musteri ve saglayici ayri tablolarda, ve send
+ * aninda hangisi oldugunu profiles.role soyluyor.
+ */
+async function profileTable(admin: any, userId: string): Promise<'client_profiles' | 'cleaner_profiles'> {
+  const { data } = await admin.from('profiles').select('role').eq('id', userId).maybeSingle();
+  return data?.role === 'cleaner' ? 'cleaner_profiles' : 'client_profiles';
+}
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
+  if (!TWILIO_SID || !TWILIO_TOKEN || !VERIFY_SERVICE) {
+    // Yapilandirilmamis halde "kod gonderildi" demek, eskiden oldugu gibi
+    // insani gelmeyecek bir kodu beklerken birakir. Dogrusunu soyluyoruz.
+    return reply({ ok: false, error: 'Phone confirmation is not switched on yet.' });
+  }
 
   try {
+    const admin = createClient(SUPABASE_URL, SERVICE_KEY);
+
+    // Kim oldugunu token soyluyor, istemci degil.
+    const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    const { data: { user } } = await admin.auth.getUser(jwt);
+    if (!user) return reply({ ok: false, error: 'Please sign in again.' }, 401);
+
     const { action, phone, code } = await req.json();
-    const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
+    const table = await profileTable(admin, user.id);
 
-    // who is calling?
-    const jwt = req.headers.get('Authorization')?.replace('Bearer ', '');
-    if (!jwt) return reply({ ok:false, error:'Not signed in' }, 401);
-    const { data: { user } } = await supabase.auth.getUser(jwt);
-    if (!user) return reply({ ok:false, error:'Not signed in' }, 401);
-
-    // ── send a code ──
+    // ── kod gonder ──
     if (action === 'send') {
-      if (!phone || !/^\+[0-9]{8,15}$/.test(phone))
-        return reply({ ok:false, error:'That number does not look right' }, 400);
+      const to = normalise(phone);
+      if (!to) return reply({ ok: false, error: 'That number does not look right.' });
 
-      // don't let them spam it
-      const { data: recent } = await supabase
-        .from('phone_verifications')
-        .select('created_at')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending:false })
-        .limit(1);
-
-      if (recent?.[0]) {
-        const since = (Date.now() - new Date(recent[0].created_at).getTime()) / 1000;
-        if (since < RESEND_WAIT_S)
-          return reply({ ok:false, error:`Wait ${Math.ceil(RESEND_WAIT_S - since)}s before asking again`, retryIn: Math.ceil(RESEND_WAIT_S - since) }, 429);
-      }
-
-      const code6 = String(Math.floor(100000 + Math.random() * 900000));
-      const hash  = await sha256(code6 + user.id);
-
-      await supabase.from('phone_verifications').insert({
-        user_id: user.id,
-        phone,
-        code_hash: hash,
-        expires_at: new Date(Date.now() + CODE_TTL_MIN * 60000).toISOString(),
-      });
-
-      await sendWhatsApp(phone,
-        `*${code6}* is your Poji verification code.\n\n` +
-        `It expires in ${CODE_TTL_MIN} minutes. If you didn't ask for this, ignore it.`
+      /* Numarayi simdi yaziyoruz, dogrulanmamis olarak. Iki isi birden
+         yapiyor: check adiminda hangi numaraya kod gittigini sunucudan
+         okuyabiliyoruz (istemcinin soylemesine guvenmiyoruz), ve kayit
+         yarida kalsa bile numara elimizde kaliyor. */
+      await admin.from(table).upsert(
+        { id: user.id, phone: to, phone_verified: false },
+        { onConflict: 'id' },
       );
 
-      return reply({ ok:true, sent:true });
+      const r = await twilioVerify('Verifications', { To: to, Channel: 'sms' });
+      if (!r.ok) {
+        console.log('verify send failed', r.status, r.json);
+        return reply({ ok: false, ...friendly(r.json?.code, 'Could not send the code. Try again.') });
+      }
+      return reply({ ok: true, status: r.json?.status });
     }
 
-    // ── check a code ──
+    // ── kodu kontrol et ──
     if (action === 'check') {
-      if (!code || !/^[0-9]{6}$/.test(code))
-        return reply({ ok:false, error:'Enter the 6-digit code' }, 400);
+      const digits = String(code || '').replace(/\D/g, '');
+      if (digits.length < 4) return reply({ ok: false, error: 'Enter the code we sent.' });
 
-      const { data: rows } = await supabase
-        .from('phone_verifications')
-        .select('*')
-        .eq('user_id', user.id)
-        .is('verified_at', null)
-        .order('created_at', { ascending:false })
-        .limit(1);
+      /* Hangi numara oldugunu istemci soylemiyor — send adiminda yazdigimiz
+         satirdan okuyoruz. Boylece kimse baskasinin numarasini dogrulatmak
+         icin gonderdigi govdeyi degistiremez. */
+      const { data: row } = await admin.from(table)
+        .select('phone, phone_verified').eq('id', user.id).maybeSingle();
+      const to = normalise(row?.phone || '');
+      if (!to) return reply({ ok: false, error: 'Ask for a new code first.' });
+      if (row?.phone_verified) return reply({ ok: true, already: true, phone: to });
 
-      const row = rows?.[0];
-      if (!row) return reply({ ok:false, error:'Ask for a new code' }, 400);
-
-      if (new Date(row.expires_at) < new Date())
-        return reply({ ok:false, error:'That code has expired — ask for a new one' }, 400);
-
-      if (row.attempts >= MAX_ATTEMPTS)
-        return reply({ ok:false, error:'Too many tries — ask for a new code' }, 429);
-
-      const hash = await sha256(code + user.id);
-      if (hash !== row.code_hash) {
-        await supabase.from('phone_verifications')
-          .update({ attempts: row.attempts + 1 }).eq('id', row.id);
-        const left = MAX_ATTEMPTS - row.attempts - 1;
-        return reply({
-          ok:false,
-          error: left > 0 ? `Wrong code — ${left} ${left===1?'try':'tries'} left` : 'Too many tries',
-        }, 400);
+      const r = await twilioVerify('VerificationCheck', { To: to, Code: digits });
+      if (!r.ok) {
+        console.log('verify check failed', r.status, r.json);
+        return reply({ ok: false, ...friendly(r.json?.code, 'That code did not work.') });
+      }
+      if (r.json?.status !== 'approved') {
+        return reply({ ok: false, error: 'That code did not work. Check the digits or ask for a new one.' });
       }
 
-      const now = new Date().toISOString();
-      await supabase.from('phone_verifications')
-        .update({ verified_at: now }).eq('id', row.id);
+      /* Dogrulandi bilgisini SUNUCU yaziyor. Eskiden bunu istemci kendi
+         satirina yaziyordu, yani hic kod girmeden "dogrulandi" demek
+         mumkundu — dogrulama suslemeden ibaretti. */
+      const { error: upErr } = await admin.from(table)
+        .update({ phone: to, phone_verified: true }).eq('id', user.id);
+      if (upErr) {
+        console.log('verify save failed', upErr.message);
+        return reply({ ok: false, error: 'Confirmed, but we could not save it. Try once more.' });
+      }
 
-      await supabase.from('profiles')
-        .update({ phone: row.phone, phone_verified: true, phone_verified_at: now })
-        .eq('id', user.id);
-
-      // mirror it onto whichever profile they have
-      await supabase.from('cleaner_profiles')
-        .update({ phone_verified: true }).eq('id', user.id);
-      await supabase.from('client_profiles')
-        .update({ phone_verified: true }).eq('id', user.id);
-
-      return reply({ ok:true, verified:true });
+      return reply({ ok: true, phone: to });
     }
 
-    return reply({ ok:false, error:'Unknown action' }, 400);
+    return reply({ ok: false, error: 'Unknown action.' }, 400);
 
   } catch (e) {
-    return reply({ ok:false, error: String(e) }, 500);
+    console.log('verify-phone error', String(e));
+    return reply({ ok: false, error: 'Something went wrong. Try again.' }, 500);
   }
 });

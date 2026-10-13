@@ -31,17 +31,27 @@ export async function routeHome() {
   if (role === 'cleaner') {
     const { data: app } = await supabase
       .from('cleaner_profiles')
-      .select('signup_stage, verification_status')
+      .select('verification_status')
       .eq('id', user.id).maybeSingle();
 
-    // Nothing started — the short version first
-    if (!app || !app.signup_stage) { router.replace('/join'); return; }
+    /* One destination for anyone who has not finished, because the
+       wizard is the thing that knows which step is missing — it reads
+       that off the data rather than off a stored stage. Splitting the
+       decision between here and there is how a provider ended up being
+       sent to /join after already completing it: join never advanced
+       signup_stage, so this branch kept sending them back to step one.
+       signup_stage no longer decides anything. */
+    const st = app?.verification_status;
+    const unfinished = !app
+      || !st
+      || ['basic','draft','needs_info','rejected'].includes(st);
 
-    // Sent back for changes
-    if (app.verification_status === 'rejected') { router.replace('/onboarding'); return; }
+    if (unfinished) { router.replace('/provider-setup'); return; }
 
-    // Everyone else lands in the app. What they can do there depends on
-    // how far through they are — the Jobs tab handles that.
+    /* Submitted, under review or approved: into the app. The Jobs tab
+       already says what they can and cannot do yet, and somebody
+       waiting on us should not be made to look at a form again on
+       every sign-in. */
     router.replace('/(provider)/jobs');
     return;
   }
