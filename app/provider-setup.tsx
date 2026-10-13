@@ -433,6 +433,27 @@ export default function ProviderSetup() {
       if (id) await supabase.from('provider_services').update(body).eq('id', id);
       else    await supabase.from('provider_services').insert(body);
     }
+
+    /* Rows for services outside the chosen trades.
+       The loop above only sees services of trades they hold now, so
+       dropping a trade used to leave its service rows behind - and a
+       seeding function that no longer exists left six cleaning services
+       on a provider who had never picked cleaning. A row nobody will
+       ever price is this provider appearing for work they do not do.
+
+       Guarded on both lists being non-empty: types is loaded
+       asynchronously, and an empty one must never be read as "they
+       offer nothing". Step 2 refuses to continue without a trade, so a
+       real orphan can never survive this. */
+    if (f.categories.length && types.length) {
+      const live = new Set(types.map(t => t.id));
+      const orphans = (existing || [])
+        .filter((r:any) => !live.has(r.service_type_id))
+        .map((r:any) => r.id);
+      if (orphans.length) {
+        await supabase.from('provider_services').delete().in('id', orphans);
+      }
+    }
   };
 
   const save = async (final: boolean): Promise<boolean> => {

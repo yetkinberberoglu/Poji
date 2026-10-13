@@ -574,36 +574,20 @@ export function effectiveService(
   };
 }
 
-/** Seed a provider's list from the platform defaults for their trades */
-export async function seedProviderServices(providerId: string, tradeIds: string[]) {
-  if (!tradeIds.length) return;
-
-  const { data: types } = await supabase
-    .from('service_types').select('*')
-    .in('trade_id', tradeIds).eq('active', true);
-  if (!types?.length) return;
-
-  const { data: existing } = await supabase
-    .from('provider_services').select('service_type_id')
-    .eq('provider_id', providerId);
-  const have = new Set((existing || []).map((r:any) => r.service_type_id));
-
-  const rows = types
-    .filter((t:any) => !have.has(t.id))
-    .map((t:any) => ({
-      provider_id: providerId,
-      service_type_id: t.id,
-      active: true,
-      labour_price: t.labour_price,
-      parts_price: t.parts_price,
-      parts_label: t.parts_label,
-      price_min: t.price_min,
-      price_max: t.price_max,
-      typical_minutes: t.typical_minutes,
-      unit_price: t.unit_price,
-      min_charge: t.min_charge,
-      unit_binding: t.unit_binding,
-    }));
-
-  if (rows.length) await supabase.from('provider_services').insert(rows);
-}
+/*
+ * seedProviderServices used to live here. It copied the platform's own
+ * figures - labour_price, unit_price, price_min and the rest - straight
+ * off service_types into the provider's rows, for every service in
+ * every trade they held, the first time they opened My services.
+ *
+ * Two things were wrong with that. A provider's "own price" was
+ * secretly the platform's price until they happened to change it, which
+ * is the opposite of what a client comparing providers is told. And it
+ * created rows for services nobody had chosen: on 13 October a provider
+ * who picked six trades - none of them cleaning - ended up offering six
+ * cleaning services at no price, because the column default had briefly
+ * made them a cleaner and opening My services seeded the lot.
+ *
+ * Providers tick their own services and set their own prices in the
+ * setup wizard now. Nothing seeds anything on their behalf.
+ */

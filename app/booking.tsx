@@ -207,6 +207,17 @@ export default function BookingScreen() {
     if (!svcType) return true;
     const own = prices[c.id];
 
+    /* The trade is the permission. A price row is only a price.
+       This used to read "if (own) return own.active !== false" BEFORE
+       the trade was checked, so a single provider_services row
+       qualified someone outright and the check below never ran. A
+       provider with priced rows for water, battery and tiling - and
+       none of those trades granted - was being shown to clients for
+       all three. Trades are granted through provider_trades and land
+       in categories by trigger; nothing else may stand in for that. */
+    const trade = svcType.trade_id;
+    if (trade && !(c.categories || []).includes(trade)) return false;
+
     // A driver only appears if they've priced the run being asked for
     if (isTransport) {
       if (!own) return false;
@@ -216,9 +227,7 @@ export default function BookingScreen() {
     }
 
     if (own) return own.active !== false;
-    const trade = svcType.trade_id;
-    if (!trade) return true;
-    return (c.categories || []).includes(trade);
+    return true;
   };
 
   /* Where the job is. A saved address carries its locality as its own

@@ -11,7 +11,7 @@ import QuestionEditor from '../components/QuestionEditor';
 import RoutePricing from '../components/RoutePricing';
 import { cheapestRoute } from '../lib/transport';
 import {
-  loadServiceTypes, loadProviderServices, seedProviderServices,
+  loadServiceTypes, loadProviderServices,
   effectiveService, fixedQuote, optionLabel, optionDelta, unitLabour,
   type ServiceType, type ProviderService,
 } from '../lib/services';
@@ -70,8 +70,11 @@ export default function MyServices() {
       minHours:   Number(me?.min_hours)   || 0,
     });
 
+    /* No seeding. This screen shows the services the provider ticked
+       for themselves in setup; it does not invent rows for them, and it
+       certainly does not copy the platform's figures in as if they were
+       the provider's own price. */
     if (cats.length) {
-      await seedProviderServices(user.id, cats);
       const t = await loadServiceTypes({ trades: cats });
       setTypes(t);
     }
