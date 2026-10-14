@@ -351,7 +351,7 @@ export default function ProviderProfile() {
       )}
 
       {(f.status === 'basic' || !f.status) && (
-        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/onboarding')}>
+        <TouchableOpacity style={s.verifyCard} onPress={()=>router.push('/provider-setup')}>
           <Text style={s.verifyIcon}>🪪</Text>
           <View style={{flex:1}}>
             <Text style={s.verifyTitle}>Verify your account</Text>
@@ -1019,11 +1019,11 @@ export default function ProviderProfile() {
         <Text style={s.chev}>›</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={s.linkRow} onPress={()=>router.push('/onboarding')}>
+      <TouchableOpacity style={s.linkRow} onPress={()=>router.push('/provider-setup')}>
         <Text style={s.linkIcon}>📄</Text>
         <View style={{flex:1}}>
           <Text style={s.linkTitle}>Documents and identity</Text>
-          <Text style={s.linkSub}>ID, selfie, work permit, insurance</Text>
+          <Text style={s.linkSub}>ID, photo, work permit, insurance</Text>
         </View>
         <Text style={s.chev}>›</Text>
       </TouchableOpacity>
