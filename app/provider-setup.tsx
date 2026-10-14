@@ -12,6 +12,7 @@ import Picker from '../components/Picker';
 import AvailabilityGrid from '../components/AvailabilityGrid';
 import { DEFAULT_AVAILABILITY, countSlots, type Availability } from '../lib/availability';
 import { loadServiceTypes, type ServiceType } from '../lib/services';
+import { validateIban, normaliseIban } from '../lib/iban';
 import {
   MALTA_LOCALITIES, validatePhone, validateEmail, ageFrom, isFutureDate,
 } from '../constants/malta';
@@ -147,6 +148,7 @@ export default function ProviderSetup() {
     work_authorization:'eu_citizen', work_permit_url:'', work_permit_expiry:'',
     team_type:'solo', team_size:1,
     company_name:'', vat_number:'', company_reg_number:'',
+    account_holder:'', iban:'', bank_name:'',
     bio:'', accepted_commission:false, rejection_reason:'',
   });
 
@@ -303,7 +305,11 @@ export default function ProviderSetup() {
       if (f.id_type === 'malta_id' && !/^[0-9]{6,7}[A-Z]$/i.test(String(f.id_number).trim()))
         m.push('A Malta ID looks like 0123456M');
       if (!f.id_front_url)      m.push('Photo of the front of your document');
-      if (!f.selfie_url)        m.push('Selfie holding your document');
+      /* The selfie-holding-your-document shot is gone. It existed to prove
+         the face on the ID is the person signing up - but the profile
+         photo is also required, is also taken on the spot, and is also a
+         face. Asking for the same evidence twice, in four photographs,
+         was the step people complained about. */
       if (!f.profile_photo_url) m.push('A profile photo clients will see');
       if (f.emergency_phone) {
         const ep = validatePhone(f.emergency_phone);
@@ -320,6 +326,15 @@ export default function ProviderSetup() {
       if (f.team_type === 'company') {
         if (!String(f.company_name).trim())       m.push('Company name');
         if (!String(f.company_reg_number).trim()) m.push('Company registration number');
+      }
+      /* Checked only when they have typed something. Leaving it blank is a
+         choice we allow; getting it wrong is money that leaves, bounces,
+         and comes back weeks later with the provider wondering where it
+         went. The check is arithmetic, not a guess - see lib/iban.ts. */
+      const ib = validateIban(f.iban);
+      if (normaliseIban(f.iban)) {
+        if (!ib.ok) m.push('That IBAN is not right — ' + (ib.reason || 'check it against your statement'));
+        else if (!String(f.account_holder).trim()) m.push('The name on the bank account');
       }
       if (!f.accepted_commission) m.push('Accept the commission to continue');
     }
@@ -385,6 +400,9 @@ export default function ProviderSetup() {
     company_name: String(f.company_name).trim(),
     vat_number: String(f.vat_number).trim(),
     company_reg_number: String(f.company_reg_number).trim(),
+    account_holder: String(f.account_holder).trim(),
+    iban: String(f.iban).replace(/\s+/g, '').toUpperCase(),
+    bank_name: String(f.bank_name).trim(),
     bio: String(f.bio).trim(),
     accepted_commission: !!f.accepted_commission,
     accepted_terms_at: final ? new Date().toISOString() : null,
@@ -934,7 +952,11 @@ export default function ProviderSetup() {
 
             <Text style={s.lbl}>How much notice do you need?</Text>
             <View style={s.pillWrap}>
-              {[2,6,12,24,48].map(h=>(
+              {/* Up to a week. A DJ asked for five days and the longest
+                  option here was two: a tradesman called out for a leak
+                  and somebody booked for a wedding are not working to the
+                  same clock, and the list has to hold both. */}
+              {[2,6,12,24,48,72,120,168].map(h=>(
                 <TouchableOpacity key={h} style={[s.pill, Number(f.notice_hours)===h&&s.pillOn]}
                   onPress={()=>set('notice_hours', String(h))}>
                   <Text style={[s.pillTxt, Number(f.notice_hours)===h&&s.pillTxtOn]}>
@@ -959,8 +981,8 @@ export default function ProviderSetup() {
                 single biggest reason someone picks you over a classified ad.
               </Text>
               <Text style={s.whyTxt}>
-                Your ID and selfie are seen only by our verification team. Clients
-                never see them.
+                Your document is seen only by our verification team. Clients
+                never see it — only your profile photo.
               </Text>
             </View>
 
@@ -1044,17 +1066,12 @@ export default function ProviderSetup() {
               onPress={()=>pickFile('id_back_url','environment')}
               hint="Skip this if your passport has everything on the photo page." />
 
-            <Upload label="Selfie holding your document" required
-              value={f.selfie_url} preview={previews.selfie_url}
-              meta={f.doc_source?.selfie_url}
-              uploading={uploading==='selfie_url'}
-              onPress={()=>pickFile('selfie_url','user')}
-              hint="Hold the ID next to your face so both are readable. This is what stops anyone using someone else's identity." />
-
             <Text style={s.divider}>Your profile photo</Text>
             <Text style={s.note}>
               Clients see this before they book. A clear, friendly face gets far
-              more work than a logo or an empty circle.
+              more work than a logo or an empty circle — and it is the photo we
+              check against your document, so take it now rather than uploading
+              an old one.
             </Text>
             <Upload label="Profile photo" required round
               value={f.profile_photo_url} preview={previews.profile_photo_url}
@@ -1195,12 +1212,60 @@ export default function ProviderSetup() {
               placeholderTextColor={C.muted} multiline textAlignVertical="top" />
             <Text style={s.note}>Optional, but it is the part clients read.</Text>
 
+            {/* Where the money goes.
+
+                This used to be a line saying "bank details later", on the
+                reasoning that nobody wants to fetch their IBAN while
+                signing up. What actually happened is that providers
+                finished, were approved, and never found the Getting paid
+                screen buried in a menu - so they were owed money with
+                nowhere to send it and no idea anything was missing.
+                Asking here, where they are already filling a form, costs
+                one field. Still optional: somebody who does not have the
+                number to hand should not be stopped, only told. */}
+            <Text style={s.divider}>Getting paid</Text>
+            <Text style={s.note}>
+              We pay into a bank account in your name, within three working days
+              of a job being confirmed. You can leave this blank and add it
+              later from your profile — but nothing can be paid out until it
+              is filled in.
+            </Text>
+
+            <Text style={s.lbl}>Name on the account</Text>
+            <TextInput style={s.input} value={String(f.account_holder)}
+              onChangeText={(t:string)=>set('account_holder',t)}
+              placeholder="As it appears on your bank statement"
+              placeholderTextColor={C.muted} />
+
+            <Text style={s.lbl}>IBAN</Text>
+            <TextInput style={s.input} value={String(f.iban)}
+              onChangeText={(t:string)=>set('iban', t.toUpperCase())}
+              placeholder="MT00 0000 0000 0000 0000 0000 000"
+              placeholderTextColor={C.muted} autoCapitalize="characters" />
+            {/* Said while they are still looking at the field, not three
+                screens later. An IBAN carries its own checksum, so a
+                mistyped character can be caught here rather than by a
+                payment that bounces. */}
+            {!!normaliseIban(f.iban) && (() => {
+              const ib = validateIban(f.iban);
+              return (
+                <Text style={[s.note, { color: ib.ok ? C.green : C.red }]}>
+                  {ib.ok ? '✓  That checks out' : `✕  ${ib.reason}`}
+                </Text>
+              );
+            })()}
+
+            <Text style={s.lbl}>Bank</Text>
+            <TextInput style={s.input} value={String(f.bank_name)}
+              onChangeText={(t:string)=>set('bank_name',t)}
+              placeholder="BOV, HSBC, Revolut…"
+              placeholderTextColor={C.muted} />
+
             <View style={s.commissionBox}>
               <Text style={s.commissionTitle}>Before you submit</Text>
               {[
                 ['Poji takes a commission', 'Shown against each of your prices on the prices step'],
-                ['You are paid after approval', 'Into your bank, within three working days'],
-                ['Bank details later',       'We only ask once you are actually owed money'],
+                ['You are paid after approval', 'Into the account above, within three working days'],
               ].map(([a,b])=>(
                 <View key={a} style={s.commissionRow}>
                   <Text style={s.commissionDot}>•</Text>

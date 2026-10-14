@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { supabase } from '../lib/supabase';
+import { supabase, siteUrl } from '../lib/supabase';
 import { C, S } from '../constants/theme';
 import Logo from '../components/Logo';
 
@@ -37,7 +37,16 @@ export default function Auth() {
     if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
     setLoading(true);
     const { data, error: err } = await supabase.auth.signUp({
-      email, password, options: { data: { full_name: fullName, role } },
+      email, password,
+      options: {
+        data: { full_name: fullName, role },
+        /* Say where the confirmation link should land instead of leaving
+           it to whatever Site URL the dashboard happens to hold. Sent
+           back to the root, so the usual routing decides where they
+           belong - which, for somebody who has just confirmed, is the
+           next step of their sign-up rather than a login form. */
+        emailRedirectTo: siteUrl() + '/',
+      },
     });
     if (err) { setLoading(false); setError(err.message); return; }
     if (data.user) {
