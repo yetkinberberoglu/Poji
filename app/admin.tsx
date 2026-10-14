@@ -71,6 +71,13 @@ export default function Admin() {
   const [search, setSearch]      = useState('');
   const [tradeFilter, setTradeF] = useState<string|null>(null);
   const [notAdmin, setNotAdmin]  = useState(false);
+  /* What providers actually charge. The card used to print the hourly rate
+     off cleaner_profiles, which until today carried a column default of 15
+     - so a DJ charging €100 an hour was shown to the approving admin as
+     "€15/hr". A number nobody typed is worse than no number, because it
+     reads as a fact. Real prices live one per service. */
+  const [svcRows, setSvcRows]    = useState<any[]>([]);
+  const [svcTypes, setSvcTypes]  = useState<any[]>([]);
 
   const load = async () => {
     const { data:{ user } } = await supabase.auth.getUser();
@@ -79,7 +86,7 @@ export default function Admin() {
     const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
     if (me?.role !== 'admin') { setNotAdmin(true); setLoading(false); return; }
 
-    const [a, p, b, r, fl, vi, fb] = await Promise.all([
+    const [a, p, b, r, fl, vi, fb, ps, stp] = await Promise.all([
       supabase.from('cleaner_profiles').select('*').order('submitted_at',{ascending:false}),
       supabase.from('profiles').select('*'),
       supabase.from('bookings').select('*').order('created_at',{ascending:false}),
@@ -88,11 +95,14 @@ export default function Admin() {
         .order('created_at', { ascending:false }).limit(100),
       supabase.from('violations').select('*').order('created_at', { ascending:false }),
       supabase.from('platform_feedback').select('*').order('created_at', { ascending:false }),
+      supabase.from('provider_services').select('*'),
+      supabase.from('service_types').select('id, name, pricing_model, unit_label, is_transport'),
     ]);
 
     setApps(a.data||[]); setProfiles(p.data||[]);
     setBookings(b.data||[]); setReviews(r.data||[]);
     setFlagged(fl.data||[]); setViol(vi.data||[]); setFeedback(fb.data||[]);
+    setSvcRows(ps.data||[]); setSvcTypes(stp.data||[]);
     setLoading(false);
   };
 
@@ -185,6 +195,47 @@ export default function Admin() {
   },[profiles, bookings, apps, reviews]);
 
   const nameOf = (id:string) => profiles.find(p=>p.id===id)?.full_name || id?.slice(0,8) || '—';
+
+  /**
+   * What a provider charges, read from the rows they filled in themselves.
+   *
+   * Written as one line per service because there is no such thing as "the"
+   * rate: an hour of a chef is not an hour of a cleaner, and the same
+   * person can price four trades four ways. The old single figure was not
+   * a summary of these, it was a separate column that nobody had set.
+   */
+  const pricesFor = (providerId:string) =>
+    svcRows
+      .filter(r => r.provider_id === providerId && r.active !== false)
+      .map(r => {
+        const t = svcTypes.find(s => s.id === r.service_type_id);
+        const name = t?.name || r.service_type_id;
+        const n = (v:any) => (v === null || v === undefined || v === '') ? null : Number(v);
+
+        if (t?.is_transport)          return [name, 'Priced by route'];
+        if (t?.pricing_model === 'quote') return [name, 'By quote'];
+
+        const hourly = n(r.hourly_rate);
+        const unit   = n(r.unit_price);
+        const labour = n(r.labour_price);
+        const parts  = n(r.parts_price);
+
+        if (hourly) {
+          const min = n(r.min_hours);
+          return [name, money(hourly) + '/hr' + (min ? `  ·  min ${min}h` : '')];
+        }
+        if (unit) {
+          const w = t?.unit_label || 'unit';
+          const minC = n(r.min_charge);
+          return [name, `${money(unit)} per ${w}` + (minC ? `  ·  min ${money(minC)}` : '')];
+        }
+        if (labour) {
+          return [name, money(labour) + (parts ? `  +  ${money(parts)} parts` : '')];
+        }
+        /* Ticked the service, never priced it. Clients cannot book this, so
+           the admin should see it before approving, not after. */
+        return [name, 'No price set'];
+      });
 
   // ── Actions ──
   const approve = async (id:string) => {
@@ -426,7 +477,21 @@ export default function Admin() {
               <TouchableOpacity style={st.rowBetween} onPress={()=>setExpanded(open?null:a.id)}>
                 <View style={{flex:1}}>
                   <Text style={st.cardTitle}>{a.first_name} {a.last_name}</Text>
-                  <Text style={st.cardSub}>{a.nationality||'—'} · {a.team_type} · €{a.hourly_rate}/hr</Text>
+                  {/* No rate here any more. One figure cannot stand for a
+                      person who prices four trades four different ways,
+                      and the figure that used to sit here was a column
+                      default nobody had typed. A count is honest; the
+                      prices themselves are one tap down. */}
+                  <Text style={st.cardSub}>
+                    {a.nationality||'—'} · {a.team_type}
+                    {(() => {
+                      const ps = pricesFor(a.id);
+                      if (!ps.length) return ' · no prices yet';
+                      const gaps = ps.filter(([,v]) => v === 'No price set').length;
+                      return ` · ${ps.length} service${ps.length>1?'s':''}`
+                           + (gaps ? ` · ${gaps} unpriced` : '');
+                    })()}
+                  </Text>
                 </View>
                 <View style={[st.pill,{backgroundColor:meta.bg}]}>
                   <Text style={[st.pillTxt,{color:meta.color}]}>{meta.label}</Text>
@@ -474,10 +539,18 @@ export default function Admin() {
                       findTrade(id)?.name || id).join(', ') || '—'],
                     ['Emergency callouts', a.accepts_urgent ? 'Yes' : 'No'],
                     ['Travel radius', a.service_radius_km ? `${a.service_radius_km} km` : '—'],
-                    ['Rate',`€${a.hourly_rate}`], ['Min hours',`${a.min_hours}h`],
                     ['Supplies',a.brings_own_supplies?'Brings own':'Client provides'],
                     ['Areas',(a.service_areas||[]).join(', ')], ['Bio',a.bio],
                   ]}/>
+
+                  {/* The prices they set themselves, one per service. This
+                      is what a client will be charged, so it is what an
+                      admin should be looking at before approving. */}
+                  <Detail title="Prices" rows={
+                    pricesFor(a.id).length
+                      ? pricesFor(a.id)
+                      : [['—','Nothing priced yet']]
+                  }/>
                   <Detail title="Payment" rows={[
                     ['Holder',a.account_holder], ['IBAN',a.iban], ['Bank',a.bank_name],
                   ]}/>
@@ -611,7 +684,12 @@ export default function Admin() {
                   <View style={{flex:1}}>
                     <Text style={st.cardTitle}>{c.full_name||'Cleaner'}</Text>
                     <Text style={st.cardSub}>
-                      {c.app ? `${c.app.team_type} · €${c.app.hourly_rate}/hr` : 'No application'}
+                      {c.app
+                        ? `${c.app.team_type}` + (() => {
+                            const n = pricesFor(c.id).length;
+                            return n ? ` · ${n} service${n>1?'s':''} priced` : ' · no prices yet';
+                          })()
+                        : 'No application'}
                     </Text>
                   </View>
                   <View style={[st.pill,{backgroundColor:meta.bg}]}>

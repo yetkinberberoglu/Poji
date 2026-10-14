@@ -166,7 +166,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         color: colors[i % colors.length],
         rating: 5.0,
         reviews: 0,
-        rate: Number(c.hourly_rate) || 15,
+        /* No invented rate. The database carried a default of 15 on this
+           column until it was dropped; this line was quietly putting it
+           back, so a DJ charging €100 an hour read as €15 wherever this
+           figure was shown. Zero means "they have not set a blanket
+           rate", which is the truth, and the booking screen already
+           knows how to treat a service with no price: it cannot be
+           booked, rather than booked at a price nobody agreed. */
+        rate: Number(c.hourly_rate) || 0,
         available: c.available !== false,
         verified: true,
         areas: c.service_areas && c.service_areas.length ? c.service_areas : ['Malta'],
@@ -918,13 +925,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const getCleanerById = (id: string) => cleaners.find(c => c.id === id);
 
 
-  /** Trades with at least one approved provider signed up */
+  /**
+   * Trades somebody can actually be sent to right now.
+   *
+   * "Approved" is not the same as "working". A provider who has switched
+   * themselves off is still approved and still holds the trade, and
+   * counting them told a client on a roadside that one provider was
+   * available when the only match was switched off - the job went into
+   * the pool and sat there with nobody able to take it.
+   */
+  const workingNow = cleaners.filter(c => c.available);
+
   const availableTrades = Array.from(new Set(
-    cleaners.flatMap(c => (c as any).categories || [])
+    workingNow.flatMap(c => (c as any).categories || [])
   ));
 
   const providersFor = (tradeId: string) =>
-    cleaners.filter(c => ((c as any).categories || []).includes(tradeId));
+    workingNow.filter(c => ((c as any).categories || []).includes(tradeId));
 
   return (
     <AppContext.Provider value={{

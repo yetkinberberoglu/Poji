@@ -129,12 +129,12 @@ export default function Roadside() {
         time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
       };
       await addBooking({
-        providerId: '',
+        cleanerId: '',
         address: locLabel || manualAddr || 'Roadside',
         date: when.date,
         time: when.time,
         hours: (Number(type.typical_minutes) || 30) / 60,
-        numWorkers: 1,
+        numCleaners: 1,
         propertyType: 'vehicle',
         serviceType: type.id,
         total: isQuoteJob ? 0 : (p?.clientPays || 0),
@@ -177,8 +177,15 @@ export default function Roadside() {
     } finally { setSub(false); }
   };
 
+  /* How many people could actually come out. Not how many hold the trade:
+     a provider who has switched themselves off is still approved and
+     still listed under it. Counting those told somebody at the roadside
+     that one provider was available when the only match was switched
+     off, and the request went into the pool where nobody could take it. */
+  const onCall = tradeInfo ? providersFor(tradeInfo.id).length : 0;
+
   const canContinue =
-    step === 0 ? !!svc && (urgent || !!slot) :
+    step === 0 ? !!svc && (urgent || !!slot) && onCall > 0 :
     step === 1 ? !!coords || !!manualAddr :
     step === 2 ? unanswered.length === 0 :
     true;
@@ -257,18 +264,31 @@ export default function Roadside() {
             <Text style={s.stepIntro}>What's happened?</Text>
             <Text style={s.hint}>
               One agreed price. No hourly meter, no surprises.
-              {tradeInfo ? ` ${providersFor(tradeInfo.id).length} provider${providersFor(tradeInfo.id).length===1?'':'s'} available.` : ''}
+              {onCall > 0 ? ` ${onCall} ${onCall===1?'provider is':'providers are'} on call.` : ''}
             </Text>
 
             {loadingCat ? (
               <View style={s.loadingBox}><ActivityIndicator color={C.primary}/></View>
-            ) : types.length === 0 ? (
+            ) : (types.length === 0 || onCall === 0) ? (
+              /* Two different absences, one honest answer. Either nobody
+                 offers this work yet, or the people who do are switched
+                 off right now. Both mean the same thing to somebody
+                 standing by a car: taking the request would be a promise
+                 we cannot keep, and a request sitting unseen in a pool is
+                 worse than being told plainly to call someone else. */
               <View style={s.noneBox}>
                 <Text style={s.noneIcon}>{tradeInfo?.icon || '🛞'}</Text>
-                <Text style={s.noneTitle}>Nobody covers this yet</Text>
+                <Text style={s.noneTitle}>
+                  {types.length === 0 ? 'Nobody covers this yet' : 'Nobody is on call right now'}
+                </Text>
                 <Text style={s.noneTxt}>
-                  We're signing up providers across Malta. Tell us what you need
-                  and we'll message you when someone can do it.
+                  {types.length === 0
+                    ? `We're signing up providers across Malta. Tell us what you need
+                       and we'll message you when someone can do it.`
+                    : `Everyone who does this work has marked themselves off duty.
+                       If you are stuck somewhere unsafe, please call a breakdown
+                       service directly rather than wait on us. Leave us a note and
+                       we'll message you the moment somebody is back on.`}
                 </Text>
                 <TouchableOpacity style={s.noneBtn} onPress={()=>router.push('/request?cat=vehicle')}>
                   <Text style={s.noneBtnTxt}>Tell us what you need</Text>
@@ -558,8 +578,10 @@ export default function Roadside() {
           {submitting ? <ActivityIndicator color={C.white}/> :
             <Text style={s.nextBtnTxt}>
               {!canContinue
-                ? (step===0 ? (svc ? 'Pick a time' : 'Pick a problem')
-                             : 'Share or type where you are')
+                ? (step===0
+                    ? (onCall === 0 ? 'Nobody is on call'
+                       : svc ? 'Pick a time' : 'Pick a problem')
+                    : 'Share or type where you are')
                 : unanswered.length > 0 ? 'Answer the questions above'
                 : step===2 && !vehicle && qs.length === 0 ? 'Skip  →'
                 : step<STEPS.length-1 ? 'Continue  →'
