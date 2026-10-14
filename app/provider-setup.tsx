@@ -8,13 +8,12 @@ import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { CATEGORIES, tradesIn, findTrade, useTrades } from '../constants/trades';
 import PhoneVerify from '../components/PhoneVerify';
-import Picker from '../components/Picker';
 import AvailabilityGrid from '../components/AvailabilityGrid';
 import { DEFAULT_AVAILABILITY, countSlots, type Availability } from '../lib/availability';
 import { loadServiceTypes, type ServiceType } from '../lib/services';
 import { validateIban, normaliseIban } from '../lib/iban';
 import {
-  MALTA_LOCALITIES, validatePhone, validateEmail, ageFrom, isFutureDate,
+  validatePhone, validateEmail, ageFrom, isFutureDate,
 } from '../constants/malta';
 
 /**
@@ -299,8 +298,8 @@ export default function ProviderSetup() {
       else if (age < 18) m.push('You must be 18 or over to work on Poji');
       else if (age > 90) m.push('Check your date of birth');
       if (!String(f.nationality).trim()) m.push('Nationality');
-      if (!String(f.address).trim())     m.push('Your address in Malta');
-      if (!f.locality)                   m.push('Your locality');
+      /* Address is no longer required and the locality question is gone —
+         the address line already contains it. */
       if (!String(f.id_number).trim())   m.push('Document number');
       if (f.id_type === 'malta_id' && !/^[0-9]{6,7}[A-Z]$/i.test(String(f.id_number).trim()))
         m.push('A Malta ID looks like 0123456M');
@@ -311,10 +310,6 @@ export default function ProviderSetup() {
          face. Asking for the same evidence twice, in four photographs,
          was the step people complained about. */
       if (!f.profile_photo_url) m.push('A profile photo clients will see');
-      if (f.emergency_phone) {
-        const ep = validatePhone(f.emergency_phone);
-        if (!ep.ok) m.push('Emergency contact number - ' + ep.reason);
-      }
     }
 
     if (s===5) {
@@ -1018,19 +1013,25 @@ export default function ProviderSetup() {
               placeholder="e.g. Maltese, Italian, Filipino"
               placeholderTextColor={C.muted} autoCapitalize="words" />
 
+            {/* One address field, not two. The locality picker underneath
+                asked "where do you live?" about an address that had just
+                been typed with the locality in it. Nothing reads the
+                separate field that the address line does not already
+                carry.
+
+                The address itself is kept but no longer required. Stripe
+                will ask for it when payouts are set up — it is a
+                condition of paying anybody — so dropping it here only
+                means asking everyone again later. Somebody who would
+                rather not type it now can carry on without it. */}
             <Text style={s.lbl}>Address in Malta</Text>
             <TextInput style={s.input} value={String(f.address)}
               onChangeText={(t:string)=>set('address',t)}
-              placeholder="Flat 3, 12 Tower Road" placeholderTextColor={C.muted} />
-
-            <Text style={s.lbl}>Locality</Text>
-            <Picker
-              value={f.locality}
-              options={MALTA_LOCALITIES}
-              onChange={(v:any)=>set('locality', v)}
-              placeholder="Where do you live?"
-              title="Your locality"
-            />
+              placeholder="Flat 3, 12 Tower Road, Sliema" placeholderTextColor={C.muted} />
+            <Text style={s.note}>
+              Optional here. Your bank will need it before you can be paid, so
+              it saves a step later.
+            </Text>
 
             <Text style={s.divider}>Your document</Text>
             <View style={s.chips}>
@@ -1079,26 +1080,12 @@ export default function ProviderSetup() {
               uploading={uploading==='profile_photo_url'}
               onPress={()=>pickFile('profile_photo_url','user')} />
 
-            <Text style={s.divider}>Emergency contact</Text>
-            <Text style={s.note}>
-              Only used if something happens to you on a job. Optional, but we'd
-              rather have it.
-            </Text>
-            <View style={s.row2}>
-              <View style={{flex:1}}>
-                <Text style={s.lbl}>Name</Text>
-                <TextInput style={s.input} value={String(f.emergency_name)}
-                  onChangeText={(t:string)=>set('emergency_name',t)}
-                  placeholder="Full name" placeholderTextColor={C.muted} />
-              </View>
-              <View style={{flex:1}}>
-                <Text style={s.lbl}>Phone</Text>
-                <TextInput style={s.input} value={String(f.emergency_phone)}
-                  onChangeText={(t:string)=>set('emergency_phone',t)}
-                  placeholder="+356 ..." placeholderTextColor={C.muted}
-                  keyboardType="phone-pad" />
-              </View>
-            </View>
+            {/* Emergency contact removed. It was two more fields on the
+                longest step of the form, asked of somebody who has not
+                yet taken a single job, for a situation we have no
+                procedure to handle. The columns stay on the table and
+                the admin screen still shows them, so nothing already
+                given is lost. */}
           </View>
         )}
 
