@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/notify';
-import { canTakeJob } from '../lib/availability';
 import { touchPush } from '../lib/push';
 import { seedChecklist, seedExtraTasks, finalQuote, fixedQuote, loadParts, partsSummary } from '../lib/services';
 
@@ -27,7 +26,6 @@ export interface Booking {
   disputeReason?: string | null;
   preferredProviderId?: string | null;
   preferredUntil?: string | null;
-  releasedToPool?: boolean;
   actualMinutes?: number | null;
   finalTotal?: number | null;
   finalProviderPayment?: number | null;
@@ -108,7 +106,7 @@ interface Ctx {
              pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
-             releasedToPool?: boolean; tradeId?: string|null;
+             tradeId?: string|null;
              labourTotal?: number|null; partsTotal?: number|null;
              answers?: Record<string,string>;
              fromLocality?: string|null; toLocality?: string|null;
@@ -337,7 +335,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         disputeReason: b.dispute_reason,
         preferredProviderId: b.preferred_provider_id,
         preferredUntil: b.preferred_until,
-        releasedToPool: b.released_to_pool,
         actualMinutes: b.actual_minutes,
         finalTotal: b.final_total,
         finalProviderPayment: b.final_provider_payment,
@@ -465,42 +462,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => { clearInterval(sweep); subscription.unsubscribe(); };
   }, []);
 
-  /**
-   * Providers who do this trade, are taking work, and are actually free
-   * at that date and time. Used every time a job goes out to the pool.
-   */
-  const matchingProviders = async (opts: {
-    tradeId?: string | null;
-    date: string;
-    time: string;
-    exclude?: string | null;
-  }) => {
-    const { data } = await supabase
-      .from('providers_public')
-      .select('id, categories, availability, notice_hours')
-      .eq('available', true);
-
-    if (!data?.length) return [];
-
-    const ids = data.map(c => c.id);
-    const { data: offs } = await supabase
-      .from('time_off').select('provider_id, starts_on, ends_on').in('provider_id', ids);
-
-    const offByProvider: Record<string, any[]> = {};
-    (offs || []).forEach((o:any) => {
-      (offByProvider[o.provider_id] ||= []).push(o);
-    });
-
-    return data.filter((c:any) => {
-      if (opts.exclude && c.id === opts.exclude) return false;
-      if (opts.tradeId && !(c.categories || []).includes(opts.tradeId)) return false;
-      return canTakeJob({
-        availability: c.availability,
-        notice_hours: c.notice_hours,
-        timeOff: offByProvider[c.id] || [],
-      }, opts.date, opts.time).ok;
-    });
-  };
+  /* matchingProviders lived here: every provider who does the trade,
+     is taking work and is free at that time. It existed to decide who
+     to tell about a job going into the pool, and it was already dead
+     code by the time the pool went - nothing had called it in weeks.
+     Who can do a job is now answered where it belongs, on the screen
+     where the client is choosing somebody. */
 
   const addBooking = async (
     b: Omit<Booking,'id'|'createdAt'>,
@@ -510,7 +477,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
              pricingModel?: string; calloutFee?: number; isUrgent?: boolean;
              lat?: number|null; lng?: number|null; locationAccuracy?: number|null;
              locationNote?: string|null; vehicleInfo?: string|null;
-             releasedToPool?: boolean; tradeId?: string|null;
+             tradeId?: string|null;
              labourTotal?: number|null; partsTotal?: number|null;
              answers?: Record<string,string>;
              fromLocality?: string|null; toLocality?: string|null;
@@ -576,7 +543,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       preferred_until: new Date(
         Date.now() + (meta?.isUrgent ? 10 : 60) * 60 * 1000
       ).toISOString(),
-      released_to_pool: false,
     }).select().single();
 
     if (error) { console.log('addBooking error:', error.message); throw error; }
@@ -594,7 +560,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       seedChecklist(data.id, b.serviceType)
         .then(() => seedExtraTasks(data.id, meta?.extrasForChecklist || []));
 
-      // Roadside and pool jobs: alert every approved provider at once
       if (meta?.promoCode) {
         supabase.from('promo_uses').insert({
           code: meta.promoCode,
@@ -629,7 +594,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         total: data.total_price, status: data.status, createdAt: data.created_at,
         preferredProviderId: data.preferred_provider_id,
         preferredUntil: data.preferred_until,
-        releasedToPool: data.released_to_pool,
         /* straight from the row the trigger just priced, so the list
            shows the same figure the database holds */
         labourTotal: data.labour_total,
@@ -677,7 +641,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) { console.log('handBack error:', error.message); throw new Error(error.message); }
 
     setBookings(prev => prev.map(b => b.id === id
-      ? { ...b, status:'needs_provider', releasedToPool:false, providerId:'' } : b));
+      ? { ...b, status:'needs_provider', providerId:'' } : b));
 
     if (bk?.clientId) {
       notify(bk.clientId, 'pick_again', {
@@ -881,24 +845,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     } else {
       /* The client said no to the new time, so this provider is out of
-         it. Back to the client to choose somebody else — not out to
-         everybody, which is what used to happen and meant the client
-         could end up with whoever answered first. */
-      setBookings(prev => prev.map(b => b.id === id
-        ? { ...b, status:'needs_provider', releasedToPool:false, providerId:'',
-            proposedDate: null, proposedTime: null, proposedNote: null }
-        : b));
+         it and the job goes back to the client — not out to everybody,
+         which is what used to happen and meant the client could end up
+         with whoever answered first.
+         *
+         * This was a plain UPDATE from here, and it did two thirds of
+         * the job. It cleared the provider but left their price sitting
+         * on the row, and it recorded no refusal — so the next list the
+         * client saw put the provider who had just lost the job back at
+         * the top of it. The button says "Find someone else" and the
+         * line under it promises somebody else at their own price;
+         * decline_proposal is what actually delivers that. It runs the
+         * same hand-back as a provider stepping back and a deadline
+         * running out, so none of the three can drift from the others.
+         */
+      const { error } = await supabase.rpc('decline_proposal', { p_booking: id });
+      if (error) { console.log('respondToProposal error:', error.message); throw new Error(error.message); }
 
-      const { error } = await supabase.from('bookings').update({
-        status: 'needs_provider',
-        released_to_pool: false,
-        provider_id: null,
-        preferred_provider_id: null,
-        preferred_until: null,
-        proposed_date: null, proposed_time: null,
-        proposed_note: null, proposed_by: null, proposed_at: null,
-      }).eq('id', id);
-      if (error) console.log('respondToProposal error:', error.message);
+      await loadBookings();
 
       if (bk.providerId) {
         notify(bk.providerId, 'time_declined', {

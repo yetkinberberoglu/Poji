@@ -30,9 +30,9 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
   pending:               {label:'Offered to You',  color:C.amber,  bg:C.amberLt,   icon:'🔔'},
   reschedule_proposed:   {label:'Time suggested',   color:C.teal,   bg:C.tealLt,    icon:'📅'},
   quoted:                {label:'Quote sent',       color:C.teal,   bg:C.tealLt,    icon:'💬'},
-  /* Kept only so an old row still renders a sensible label. Nothing
-     writes either of these to a job a provider can see any more. */
-  pending_pool:          {label:'Open to All',     color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
+  /* needs_provider is kept only so an old row still renders a sensible
+     label. A provider should not be looking at one: the job has gone
+     back to the client and is nobody's until they choose again. */
   needs_provider:        {label:'Back with client',color:C.muted,  bg:C.bgAlt,     icon:'↩'},
   accepted:              {label:'Accepted',        color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'En Route',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
@@ -1319,8 +1319,6 @@ const s0 = StyleSheet.create({
   warnTxt:{fontSize:12,color:C.amber,fontWeight:'700'},
   priorityBox:{backgroundColor:C.amberLt,borderRadius:10,padding:10,borderWidth:1,borderColor:'#FDE68A'},
   priorityTxt:{fontSize:12,color:C.amber,fontWeight:'700',lineHeight:17},
-  poolBox:{backgroundColor:'#F3E8FF',borderRadius:10,padding:10,borderWidth:1,borderColor:'#E9D5FF'},
-  poolTxt:{fontSize:12,color:C.accent,fontWeight:'700'},
   pinBox:{backgroundColor:C.amberLt,borderRadius:14,padding:16,gap:10,borderWidth:1,borderColor:'#FDE68A'},
   pinTitle:{fontSize:14,fontWeight:'800',color:C.amber},
   pinHint:{fontSize:12,color:C.text,lineHeight:18},

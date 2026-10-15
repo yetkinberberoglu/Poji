@@ -161,9 +161,13 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `📍 ${d.address}\n\n`
         + `See you then.`;
 
+    /* This said the job had "gone back to the pool". There is no pool,
+       and there has not been one since the client became the person who
+       chooses. It goes back to them. */
     case 'time_declined':
       return `😕 *That time didn't work for the client*\n\n`
-        + `${d.address} on ${d.date} at ${d.time} has gone back to the pool.\n\n`
+        + `${d.address} on ${d.date} at ${d.time} is back with the client, `
+        + `who will choose somebody else.\n\n`
         + `No hard feelings — plenty more coming.`;
 
     case 'job_completed':

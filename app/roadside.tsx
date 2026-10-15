@@ -227,11 +227,11 @@ export default function Roadside() {
         // the window rides along with the answers so the provider sees it
         // on their job card without a new column
         answers: (!urgent && slot) ? { ...answers, when: slotText(slot) } : answers,
-        /* Not thrown open any more. It belongs to the provider the
-           client picked; if they do not take it, the client is offered
-           somebody else at that person's own price rather than having
-           the job quietly reassigned at a price they never saw. */
-        releasedToPool: false,
+        /* Nothing is thrown open any more, so there is no flag left to
+           set. The job belongs to the provider the client picked; if
+           they do not take it, the client is offered somebody else at
+           that person's own price rather than having the job quietly
+           reassigned at a price they never saw. */
       });
 
       setPlaced({

@@ -11,8 +11,6 @@ import QuotePanel from '../../components/QuotePanel';
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Waiting for provider',color:C.amber, bg:C.amberLt,   icon:'⏳'},
-  /* Left in so an old row still renders a label. Nothing writes it. */
-  pending_pool:          {label:'Finding a provider',color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
   needs_provider:        {label:'Choose a provider',  color:C.amber,  bg:C.amberLt,   icon:'👤'},
   reschedule_proposed:   {label:'New time offered', color:C.teal,   bg:C.tealLt,    icon:'📅'},
   quoted:                {label:'Quote received',   color:C.teal,   bg:C.tealLt,    icon:'💬'},
@@ -185,7 +183,13 @@ export default function Bookings() {
   };
 
   const doProposal = async (id: string, accept: boolean) => {
-    setBusy(id); await respondToProposal(id, accept); setBusy(null);
+    setBusy(id); setActionError('');
+    try {
+      await respondToProposal(id, accept);
+    } catch (e: any) {
+      setActionError(e?.message || 'That could not be sent.');
+    }
+    setBusy(null);
   };
   /* The server can refuse this now — somebody who has already turned
      the job down, or who has switched off job alerts since the list
@@ -373,7 +377,7 @@ export default function Bookings() {
                     ) : (
                       <View style={st.chooseActions}>
                         {!alone && (
-                          <TouchableOpacity style={st.poolBtn} onPress={()=>setPickFor(b.id)}>
+                          <TouchableOpacity style={st.chooseBtn} onPress={()=>setPickFor(b.id)}>
                             <Text style={st.whiteTxt}>👤  Pick someone else</Text>
                           </TouchableOpacity>
                         )}
@@ -795,7 +799,7 @@ const st = StyleSheet.create({
   chooseTitle:{fontSize:14,fontWeight:'800',color:C.dark},
   chooseTxt:{fontSize:12,color:C.text,lineHeight:18},
   chooseActions:{gap:8,marginTop:4},
-  poolBtn:{backgroundColor:C.accent,borderRadius:12,paddingVertical:13,alignItems:'center'},
+  chooseBtn:{backgroundColor:C.accent,borderRadius:12,paddingVertical:13,alignItems:'center'},
   pickBtn:{borderWidth:1.5,borderColor:C.border,borderRadius:12,paddingVertical:12,alignItems:'center',backgroundColor:C.white},
   pickBtnTxt:{color:C.text,fontWeight:'600',fontSize:13},
   pickList:{gap:8,marginTop:4},
@@ -806,9 +810,6 @@ const st = StyleSheet.create({
   pickName:{fontSize:14,fontWeight:'700',color:C.dark},
   pickMeta:{fontSize:11,color:C.muted,marginTop:1},
   pickGo:{fontSize:20,color:C.border},
-  poolBox:{backgroundColor:'#F3E8FF',borderRadius:14,padding:14,gap:6,borderWidth:1,borderColor:'#E9D5FF'},
-  poolTitle:{fontSize:14,fontWeight:'800',color:C.accent},
-  poolTxt:{fontSize:12,color:C.text,lineHeight:18},
   priceSub:{fontSize:10,color:C.muted,marginTop:2},
   runBox:{backgroundColor:C.primaryLt,borderRadius:14,padding:14,gap:8,borderWidth:1,borderColor:C.border},
   runTitle:{fontSize:13,fontWeight:'800',color:C.primary},
