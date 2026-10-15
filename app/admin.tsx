@@ -18,6 +18,11 @@ const APP_STATUS: Record<string,{label:string;color:string;bg:string}> = {
   under_review: {label:'Under review', color:C.teal,  bg:C.tealLt},
   approved:     {label:'Approved',     color:C.green, bg:C.greenLt},
   rejected:     {label:'Rejected',     color:C.red,   bg:C.redLt},
+  /* Stopped, not un-applied. Someone who has been working for a month and
+     then breaks a rule is a different case from someone whose paperwork
+     has not been read yet, and the badge has to say which. */
+  suspended:    {label:'Suspended',    color:C.red,   bg:C.redLt},
+  archived:     {label:'Archived',     color:C.muted, bg:C.bgAlt},
 };
 
 const BK_STATUS: Record<string,{label:string;color:string;bg:string}> = {
@@ -261,10 +266,34 @@ export default function Admin() {
     setRejectFor(null); setRejectTxt(''); await load(); setBusy(null);
   };
 
-  const revoke = async (id:string) => {
-    setBusy(id);
-    await supabase.from('cleaner_profiles')
-      .update({ verification_status:'submitted', reviewed_at:null }).eq('id', id);
+  /**
+   * Stopping somebody, and starting them again.
+   *
+   * This used to be a single "Revoke approval" that set the status back
+   * to 'submitted'. That is not revoking, it is forgetting: the record
+   * that they had ever been approved went away and the card offered
+   * Approve and Reject again, as though a provider of a month's standing
+   * had just walked in. Three different intentions now have three
+   * different names, and the one that cannot be undone is the one the
+   * database refuses unless there is genuinely nothing to lose.
+   */
+  const [actionFor, setActionFor]   = useState<{id:string;kind:'suspend'|'archive'}|null>(null);
+  const [actionNote, setActionNote] = useState('');
+  const [confirmRemove, setRemove]  = useState<string|null>(null);
+  const [actionErr, setActionErr]   = useState('');
+
+  const lifecycle = async (fn:string, args:any, id:string) => {
+    setBusy(id); setActionErr('');
+    const { error } = await supabase.rpc(fn, args);
+    if (error) {
+      /* Said in full. When a delete is refused it is refused with a
+         count of the bookings it would have destroyed, and that number
+         is the whole answer. */
+      setActionErr(error.message);
+      setBusy(null);
+      return;
+    }
+    setActionFor(null); setActionNote(''); setRemove(null);
     await load(); setBusy(null);
   };
 
@@ -558,6 +587,17 @@ export default function Admin() {
                   {a.rejection_reason ? (
                     <View style={st.noteRed}><Text style={st.noteRedTxt}>Rejected: {a.rejection_reason}</Text></View>
                   ) : null}
+                  {/* Its own note, its own word. Suspension reasons were
+                      being written into rejection_reason, so the screen
+                      told you somebody had been rejected when they had
+                      been stopped. */}
+                  {a.status_note ? (
+                    <View style={st.noteRed}>
+                      <Text style={st.noteRedTxt}>
+                        {a.verification_status === 'archived' ? 'Archived' : 'Suspended'}: {a.status_note}
+                      </Text>
+                    </View>
+                  ) : null}
 
                   {['submitted','under_review'].includes(a.verification_status) && (
                     rejectFor===a.id ? (
@@ -589,11 +629,86 @@ export default function Admin() {
                       </View>
                     )
                   )}
+                  {!!actionErr && (actionFor?.id === a.id || confirmRemove === a.id) ? (
+                    <View style={st.noteRed}><Text style={st.noteRedTxt}>{actionErr}</Text></View>
+                  ) : null}
+
                   {a.verification_status==='approved' && (
-                    <TouchableOpacity style={[st.revokeBtn,isBusy&&st.dis]} disabled={isBusy}
-                      onPress={()=>revoke(a.id)}>
-                      <Text style={st.revokeTxt}>{isBusy?'…':'Revoke approval'}</Text>
-                    </TouchableOpacity>
+                    actionFor?.id === a.id ? (
+                      <View style={{gap:8}}>
+                        <Text style={st.label}>
+                          {actionFor.kind === 'suspend'
+                            ? 'Why are they being stopped?'
+                            : 'Why are they being archived?'}
+                        </Text>
+                        <TextInput style={st.textArea} value={actionNote} onChangeText={setActionNote}
+                          placeholder={actionFor.kind === 'suspend'
+                            ? 'e.g. took a client off the platform — stopped pending a conversation'
+                            : 'e.g. moved away, no longer trading'}
+                          placeholderTextColor={C.muted} multiline textAlignVertical="top" />
+                        <View style={st.actionRow}>
+                          <TouchableOpacity style={st.ghostBtn}
+                            onPress={()=>{setActionFor(null);setActionNote('');setActionErr('');}}>
+                            <Text style={st.ghostTxt}>Back</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[st.dangerBtn,isBusy&&st.dis]} disabled={isBusy}
+                            onPress={()=>lifecycle(
+                              actionFor.kind === 'suspend' ? 'suspend_provider' : 'archive_provider',
+                              { p_id: a.id, p_note: actionNote.trim() || null }, a.id)}>
+                            <Text style={st.whiteTxt}>
+                              {isBusy ? '…' : actionFor.kind === 'suspend' ? 'Suspend them' : 'Archive them'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={st.actionRow}>
+                        <TouchableOpacity style={[st.ghostBtn,isBusy&&st.dis]} disabled={isBusy}
+                          onPress={()=>{setActionFor({id:a.id,kind:'archive'});setActionErr('');}}>
+                          <Text style={st.ghostTxt}>Archive</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[st.revokeBtn,{flex:1,marginTop:0},isBusy&&st.dis]} disabled={isBusy}
+                          onPress={()=>{setActionFor({id:a.id,kind:'suspend'});setActionErr('');}}>
+                          <Text style={st.revokeTxt}>⏸  Suspend</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )
+                  )}
+
+                  {['suspended','archived'].includes(a.verification_status) && (
+                    <>
+                      {/* Back on, in one press. The approval was never
+                          withdrawn, so nothing is asked for twice. */}
+                      <TouchableOpacity style={[st.approveBtn,isBusy&&st.dis]} disabled={isBusy}
+                        onPress={()=>lifecycle('reactivate_provider', { p_id: a.id }, a.id)}>
+                        <Text style={st.whiteTxt}>{isBusy?'…':'↻  Reactivate'}</Text>
+                      </TouchableOpacity>
+
+                      {confirmRemove === a.id ? (
+                        <View style={st.confirmRow}>
+                          <Text style={st.confirmTxt}>
+                            Delete this provider and their login for good? This cannot be
+                            undone, and it is refused outright if they have any job history —
+                            that history belongs to their clients too.
+                          </Text>
+                          <View style={st.confirmBtns}>
+                            <TouchableOpacity style={st.ghostSm}
+                              onPress={()=>{setRemove(null);setActionErr('');}}>
+                              <Text style={st.ghostSmTxt}>Keep</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[st.dangerSm,isBusy&&st.dis]} disabled={isBusy}
+                              onPress={()=>lifecycle('delete_provider', { p_id: a.id }, a.id)}>
+                              <Text style={st.dangerSmTxt}>{isBusy?'…':'Delete'}</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ) : (
+                        <TouchableOpacity style={st.deleteLink}
+                          onPress={()=>{setRemove(a.id);setActionErr('');}}>
+                          <Text style={st.deleteLinkTxt}>🗑  Delete permanently</Text>
+                        </TouchableOpacity>
+                      )}
+                    </>
                   )}
                   {a.verification_status==='rejected' && (
                     <TouchableOpacity style={[st.approveBtn,isBusy&&st.dis]} disabled={isBusy}
