@@ -339,17 +339,27 @@ export function fixedQuote(opts: {
   /** This service's rate. Big jobs carry less, or providers go around us. */
   labourCommission?: number | null;
 }) {
-  const URGENT_SURCHARGE = 0.25;
   const VAT_RATE = VAT_ON_TOP;
   const COMMISSION = opts.labourCommission != null
     ? Number(opts.labourCommission) : LABOUR_COMMISSION;
 
   const labour  = Number(opts.labourPrice) || 0;
-  const callout = Number(opts.calloutFee)  || 0;
   const parts   = Number(opts.partsPrice)  || 0;
 
-  // Urgency is a premium on the work, never on the parts
-  const urgentFee = opts.urgent ? +((labour + callout) * URGENT_SURCHARGE).toFixed(2) : 0;
+  /* One price, the provider's own.
+   *
+   * There used to be a callout fee and a 25% surcharge for immediate
+   * work on top of it. A provider who wrote €40 for a puncture ended up
+   * quoting the client €71, and nothing on the screen explained the
+   * other €31. Providers already price travel in — €40 in Malta, €75 in
+   * Gozo — so the callout was charging for the same journey twice, and
+   * urgency is not an extra service, it is what roadside work is.
+   *
+   * Both are still accepted as arguments, and both are ignored, so that
+   * a stray figure left in the data cannot put the line back.
+   */
+  const callout   = 0;
+  const urgentFee = 0;
 
   const labourSide = +(labour + callout + urgentFee).toFixed(2);
   const exVat      = +(labourSide + parts).toFixed(2);

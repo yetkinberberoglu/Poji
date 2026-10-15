@@ -7,6 +7,18 @@ const TWILIO_SID   = Deno.env.get('TWILIO_ACCOUNT_SID')!;
 const TWILIO_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN')!;
 const TWILIO_FROM  = Deno.env.get('TWILIO_WHATSAPP_FROM')!; // e.g. whatsapp:+14155238886
 
+/* Where SMS goes out from when WhatsApp cannot reach somebody. Either a
+   Twilio number you own, or an alphanumeric sender ID such as "Poji"
+   where the country allows it. Left unset, the fallback does not run and
+   says so in the log rather than failing quietly. */
+const SMS_FROM = Deno.env.get('TWILIO_SMS_FROM') || '';
+
+/* A shared secret on the status callback URL. Twilio tells us what
+   happened to each message by calling us back, and that endpoint has to
+   be open to the internet for Twilio to reach it; without this anybody
+   could post us a delivery receipt and we would believe it. */
+const STATUS_SECRET = Deno.env.get('TWILIO_STATUS_SECRET') || '';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
@@ -173,15 +185,45 @@ function buildMessage(template: string, d: Record<string, any>): string {
   }
 }
 
-async function sendWhatsApp(to: string, body: string) {
+/** Malta numbers are often typed without the country code. */
+function normalisePhone(to: string) {
   const cleaned = to.replace(/[^\d+]/g, '');
-  const target  = cleaned.startsWith('+') ? cleaned : `+356${cleaned}`;
+  return cleaned.startsWith('+') ? cleaned : `+356${cleaned}`;
+}
+
+/**
+ * Hands a message to Twilio and asks to be told what becomes of it.
+ *
+ * The asking is the point. Twilio accepting a message means only that:
+ * accepted. Whether it reached a phone is decided minutes later and was,
+ * until now, never told to us — a job offer to a provider whose number
+ * was not on WhatsApp came back 'sent' in our own table and 'undelivered'
+ * in Twilio's console, and the only way to know which was true was for
+ * somebody to go and look. StatusCallback closes that gap.
+ */
+async function sendTwilio(opts: {
+  to: string; body: string; channel: 'whatsapp' | 'sms'; notificationId: string;
+}) {
+  const target = normalisePhone(opts.to);
+
+  if (opts.channel === 'sms' && !SMS_FROM) {
+    throw new Error('No SMS sender configured (TWILIO_SMS_FROM)');
+  }
 
   const form = new URLSearchParams({
-    From: TWILIO_FROM,
-    To:   `whatsapp:${target}`,
-    Body: body,
+    From: opts.channel === 'whatsapp' ? TWILIO_FROM : SMS_FROM,
+    To:   opts.channel === 'whatsapp' ? `whatsapp:${target}` : target,
+    Body: opts.body,
   });
+
+  /* Only when there is a secret to protect the endpoint with. Sending the
+     callback to an open URL would be worse than not asking at all. */
+  if (STATUS_SECRET) {
+    form.set('StatusCallback',
+      `${SUPABASE_URL}/functions/v1/twilio-status`
+      + `?n=${encodeURIComponent(opts.notificationId)}`
+      + `&k=${encodeURIComponent(STATUS_SECRET)}`);
+  }
 
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
@@ -265,7 +307,9 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const sid = await sendWhatsApp(phone, body);
+      const sid = await sendTwilio({
+        to: phone, body, channel: 'whatsapp', notificationId: logRow.id,
+      });
       await supabase.from('notifications')
         .update({ status: 'sent', provider_id: sid, sent_at: new Date().toISOString() })
         .eq('id', logRow.id);

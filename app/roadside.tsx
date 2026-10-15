@@ -346,7 +346,13 @@ export default function Roadside() {
               ))}
             </View>
             {urgent ? (
-              <Text style={s.urgNote}>Immediate callouts carry a 25% surcharge.</Text>
+              /* No surcharge to warn about any more. Coming out at once
+                 is not an extra service on top of roadside work, it is
+                 the work; a provider who wants paying for it says so in
+                 their price. */
+              <Text style={s.urgNote}>
+                The price you see is the price. Nothing is added for coming out now.
+              </Text>
             ) : (
               <>
                 <Text style={s.lbl}>When suits you?</Text>
@@ -511,10 +517,12 @@ export default function Roadside() {
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Fixed price</Text>
               {[
+                /* The provider's price, what the answers changed about
+                   it, and the card fee. Three lines at most. The callout
+                   and the urgency surcharge used to sit in here and were
+                   the two nobody could explain. */
                 ['Job',          `€${(p.labour - adj.labour).toFixed(2)}`],
                 ...adj.lines.map(x=>[x.label, `€${x.amount.toFixed(2)}`]),
-                ['Callout',      `€${p.callout.toFixed(2)}`],
-                ...(p.urgentFee ? [['Immediate callout (25%)', `€${p.urgentFee.toFixed(2)}`]] : []),
                 ...(p.vat > 0 ? [['VAT', `€${p.vat.toFixed(2)}`]] : []),
                 ['Card fee',     `€${p.stripeFee.toFixed(2)}`],
               ].map(([l,v])=>(

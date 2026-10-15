@@ -907,7 +907,10 @@ export default function BookingScreen() {
             ['Before they accept',            'Free — cancel from your bookings'],
             ['More than 12 hours before',     'Free'],
             ['Less than 12 hours before',     'Up to one hour at their rate'],
-            ['Nobody home when they arrive',  'The callout is chargeable'],
+            /* There is no callout fee any more, so this cannot say the
+               callout is chargeable. What is true is that somebody made
+               the journey. */
+            ['Nobody home when they arrive',  'Up to one hour at their rate'],
           ].map(([a,b])=>(
             <View key={a} style={s.cancelRow}>
               <Text style={s.cancelA}>{a}</Text>
