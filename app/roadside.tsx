@@ -13,7 +13,14 @@ import { getCurrentLocation, reverseGeocode, mapsLink, type Coords } from '../li
 import ServiceQuestions from '../components/ServiceQuestions';
 import { missingAnswers, answerAdjustments } from '../lib/services';
 
-const STEPS = ['Problem','Location','Vehicle','Confirm'];
+/* 'Who' is new. Roadside used to send the job to a pool without anybody
+   being chosen, which meant the price on the screen had to come from
+   somewhere other than a provider - so it came from us. A platform that
+   sets prices is not a marketplace, and a figure invented before anyone
+   is chosen is no use to the person reading it. Now the people who are
+   actually on call are listed with their own prices, exactly as they are
+   for a cleaner, and the client picks. */
+const STEPS = ['Problem','Location','Vehicle','Who','Confirm'];
 
 /**
  * Non-urgent callouts still need a when. We ask for a window rather than a
@@ -72,6 +79,12 @@ export default function Roadside() {
   const [vehicle, setVehicle] = useState('');
   const [slot, setSlot]       = useState<Slot|null>(null);
   const [answers, setAnswers] = useState<Record<string,string>>({});
+  /* Every on-call provider's own price for every service on this screen,
+     keyed service → provider. Loaded in one query rather than one per
+     service: the list is short and a stranded person should not wait on
+     six round trips. */
+  const [prices, setPrices]   = useState<Record<string, Record<string, any>>>({});
+  const [picked, setPicked]   = useState<string|null>(null);
 
   const type = types.find(t => t.id === svc) || null;
   const isQuoteJob = type?.pricing_model === 'quote';
@@ -79,13 +92,37 @@ export default function Roadside() {
   const adj = answerAdjustments(qs0, answers);
   const qs = qs0;
   const unanswered = missingAnswers(qs, answers);
-  const p = type ? fixedQuote({
-    labourCommission: type.labour_commission,
-    labourPrice: (Number(type.labour_price ?? type.fixed_price) || 0) + adj.labour,
-    partsPrice:  (Number(type.parts_price) || 0) + adj.parts,
-    calloutFee:  Number(type.callout_fee) || 0,
-    urgent,
-  }) : null;
+
+  /** What this provider charges for this service, or nothing if they
+      have not priced it. A service they have not priced is a service
+      they cannot be booked for — we are not filling the gap ourselves. */
+  const rowFor = (t: ServiceType | null, providerId: string) =>
+    t ? prices[t.id]?.[providerId] : undefined;
+
+  const quoteFor = (t: ServiceType | null, providerId: string, withAnswers = false) => {
+    const own = rowFor(t, providerId);
+    if (!t || !own) return null;
+    const labour = Number(own.labour_price ?? own.unit_price ?? own.hourly_rate) || 0;
+    if (!labour && t.pricing_model !== 'quote') return null;
+    return fixedQuote({
+      labourCommission: t.labour_commission,
+      labourPrice: labour + (withAnswers ? adj.labour : 0),
+      partsPrice:  (Number(own.parts_price) || 0) + (withAnswers ? adj.parts : 0),
+    });
+  };
+
+  /** The people who could actually come, cheapest first. */
+  const candidates = (() => {
+    if (!type || !tradeInfo) return [] as { c: any; q: any }[];
+    return providersFor(tradeInfo.id)
+      .map((c: any) => ({ c, q: quoteFor(type, c.id, true) }))
+      .filter(x => type.pricing_model === 'quote' ? !!rowFor(type, x.c.id) : !!x.q)
+      .sort((a, b) => (a.q?.clientPays ?? 0) - (b.q?.clientPays ?? 0));
+  })();
+
+  /* The price is whoever was chosen. Before that there is no price, and
+     saying one would be making it up. */
+  const p = picked ? quoteFor(type, picked, true) : null;
 
   useEffect(() => {
     (async () => {
@@ -103,6 +140,27 @@ export default function Roadside() {
       setLC(false);
     })();
   }, [trade, availableTrades.length]);
+
+  /* Everybody's prices for everything on this screen, in one go. */
+  useEffect(() => {
+    (async () => {
+      const ids = types.map(t => t.id);
+      if (!ids.length) { setPrices({}); return; }
+      const { data, error } = await supabase
+        .from('provider_services').select('*')
+        .in('service_type_id', ids).eq('active', true);
+      if (error) { console.log('roadside prices:', error.message); return; }
+      const map: Record<string, Record<string, any>> = {};
+      (data || []).forEach((r: any) => {
+        (map[r.service_type_id] ||= {})[r.provider_id] = r;
+      });
+      setPrices(map);
+    })();
+  }, [types]);
+
+  /* Change the job and the person you picked for the old one is no
+     longer a choice you made. */
+  useEffect(() => { setPicked(null); }, [svc]);
 
   const askLocation = async () => {
     setLocBusy(true); setDenied(false);
@@ -129,7 +187,11 @@ export default function Roadside() {
         time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
       };
       await addBooking({
-        cleanerId: '',
+        /* Sent to the person the client chose, at the price that person
+           set. It used to go out with nobody on it and a price nobody
+           had agreed to, which is how a job ended up sitting in a pool
+           that no provider could take. */
+        cleanerId: picked || '',
         address: locLabel || manualAddr || 'Roadside',
         date: when.date,
         time: when.time,
@@ -138,7 +200,7 @@ export default function Roadside() {
         propertyType: 'vehicle',
         serviceType: type.id,
         total: isQuoteJob ? 0 : (p?.clientPays || 0),
-        status: 'pending_pool',
+        status: 'pending',
       } as any, {
         multiplier: 1,
         suppliesByCleaner: false,
@@ -149,7 +211,7 @@ export default function Roadside() {
         extrasForChecklist: [],
         pricingModel: isQuoteJob ? 'quote' : 'fixed',
         tradeId: type.trade_id || trade || null,
-        calloutFee: Number(type.callout_fee) || 0,
+        calloutFee: 0,
         isUrgent: urgent,
         lat: coords?.lat ?? null,
         lng: coords?.lng ?? null,
@@ -159,7 +221,11 @@ export default function Roadside() {
         // the window rides along with the answers so the provider sees it
         // on their job card without a new column
         answers: (!urgent && slot) ? { ...answers, when: slotText(slot) } : answers,
-        releasedToPool: true,
+        /* Not thrown open any more. It belongs to the provider the
+           client picked; if they do not take it, the client is offered
+           somebody else at that person's own price rather than having
+           the job quietly reassigned at a price they never saw. */
+        releasedToPool: false,
       });
 
       setPlaced({
@@ -188,6 +254,7 @@ export default function Roadside() {
     step === 0 ? !!svc && (urgent || !!slot) && onCall > 0 :
     step === 1 ? !!coords || !!manualAddr :
     step === 2 ? unanswered.length === 0 :
+    step === 3 ? !!picked :
     true;
 
   if (placed) {
@@ -297,13 +364,17 @@ export default function Roadside() {
             ) : types.map(t=>{
               const on = svc === t.id;
               const byQuote = t.pricing_model === 'quote';
-              const q  = fixedQuote({
-                labourCommission: t.labour_commission,
-                labourPrice: Number(t.labour_price ?? t.fixed_price) || 0,
-                partsPrice:  Number(t.parts_price) || 0,
-                calloutFee:  Number(t.callout_fee) || 0,
-                urgent,
-              });
+              /* The cheapest real price anybody on call is charging for
+                 this, shown as "from". There is no one price for a job
+                 whose price belongs to whoever turns up, and the figure
+                 that used to sit here was ours rather than anyone's. */
+              const quotes = tradeInfo
+                ? providersFor(t.trade_id || tradeInfo.id)
+                    .map((c:any) => quoteFor(t, c.id))
+                    .filter(Boolean) as any[]
+                : [];
+              const cheapest = quotes.length
+                ? Math.min(...quotes.map(x => x.clientPays)) : null;
               return (
                 <TouchableOpacity key={t.id} style={[s.card, on&&s.cardOn]} onPress={()=>setSvc(t.id)}>
                   <Text style={s.cardIcon}>{t.icon}</Text>
@@ -322,8 +393,12 @@ export default function Roadside() {
                       </>
                     ) : (
                       <>
-                        <Text style={[s.cardPrice, on&&{color:C.primary}]}>€{q.clientPays.toFixed(0)}</Text>
-                        <Text style={s.cardPriceSub}>all in</Text>
+                        <Text style={[s.cardPrice, on&&{color:C.primary}]}>
+                          {cheapest === null ? '—' : `€${cheapest.toFixed(0)}`}
+                        </Text>
+                        <Text style={s.cardPriceSub}>
+                          {cheapest === null ? 'nobody priced' : 'from'}
+                        </Text>
                       </>
                     )}
                   </View>
@@ -478,14 +553,76 @@ export default function Roadside() {
           </View>
         )}
 
-        {/* 3 — confirm */}
-        {step===3 && type && p && (
+        {/* 3 — who comes out */}
+        {step===3 && type && (
+          <View style={s.step}>
+            <Text style={s.stepIntro}>Who can come out?</Text>
+            <Text style={s.hint}>
+              These are the people on call for this right now, with their own
+              prices. Pick one and the request goes straight to them.
+            </Text>
+
+            {candidates.length === 0 ? (
+              /* On call for the trade but nobody has priced this
+                 particular job. Said plainly rather than filled in with
+                 a figure of ours. */
+              <View style={s.noneBox}>
+                <Text style={s.noneIcon}>{type.icon || '🛞'}</Text>
+                <Text style={s.noneTitle}>Nobody has priced this one</Text>
+                <Text style={s.noneTxt}>
+                  There are providers on call, but none of them has set a price
+                  for {type.name.toLowerCase()} yet. Try another option above, or
+                  leave us a note and we'll chase it up.
+                </Text>
+                <TouchableOpacity style={s.noneBtn} onPress={()=>setStep(0)}>
+                  <Text style={s.noneBtnTxt}>Back to the list</Text>
+                </TouchableOpacity>
+              </View>
+            ) : candidates.map(({ c, q }) => {
+              const on = picked === c.id;
+              return (
+                <TouchableOpacity key={c.id} style={[s.card, on&&s.cardOn]}
+                  onPress={()=>setPicked(c.id)}>
+                  <View style={[s.whoAvatar, on&&{backgroundColor:C.primary}]}>
+                    <Text style={s.whoAvatarTxt}>{c.initials}</Text>
+                  </View>
+                  <View style={{flex:1}}>
+                    <Text style={s.cardName}>{c.name}</Text>
+                    <Text style={s.cardDesc}>
+                      {(c.badges && c.badges[0]) || 'Verified provider'}
+                    </Text>
+                    <Text style={s.cardTime}>Usually about {type.typical_minutes} min on site</Text>
+                  </View>
+                  <View style={{alignItems:'flex-end'}}>
+                    {q ? (
+                      <>
+                        <Text style={[s.cardPrice, on&&{color:C.primary}]}>
+                          €{q.clientPays.toFixed(0)}
+                        </Text>
+                        <Text style={s.cardPriceSub}>all in</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={[s.cardPrice, on&&{color:C.primary}]}>—</Text>
+                        <Text style={s.cardPriceSub}>they quote</Text>
+                      </>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {/* 4 — confirm */}
+        {step===4 && type && (isQuoteJob || p) && (
           <View style={s.step}>
             <Text style={s.stepIntro}>Send the request</Text>
 
             <View style={s.summCard}>
               {[
                 ['Problem',  `${type.icon}  ${type.name}`],
+                ['Who',      candidates.find(x => x.c.id === picked)?.c.name || '—'],
                 ['Where',    locLabel || manualAddr || '—'],
                 ['Vehicle',  vehicle || 'Not given'],
                 ['Timing',   urgent ? 'Right now' : slotText(slot)],
@@ -513,7 +650,7 @@ export default function Roadside() {
                   </Text>
                 )}
               </View>
-            ) : (
+            ) : p ? (
             <View style={s.priceCard}>
               <Text style={s.priceTitle}>Fixed price</Text>
               {[
@@ -536,7 +673,7 @@ export default function Roadside() {
                 <Text style={s.totalVal}>€{p.clientPays.toFixed(2)}</Text>
               </View>
             </View>
-            )}
+            ) : null}
 
             {failed ? (
               <View style={s.failBox}>
@@ -589,6 +726,7 @@ export default function Roadside() {
                 ? (step===0
                     ? (onCall === 0 ? 'Nobody is on call'
                        : svc ? 'Pick a time' : 'Pick a problem')
+                    : step===3 ? 'Pick who comes out'
                     : 'Share or type where you are')
                 : unanswered.length > 0 ? 'Answer the questions above'
                 : step===2 && !vehicle && qs.length === 0 ? 'Skip  →'
@@ -634,6 +772,9 @@ const s = StyleSheet.create({
   card:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:16,borderWidth:1.5,borderColor:C.border,backgroundColor:C.white,marginBottom:10,...S.sm},
   cardOn:{borderColor:C.amber,backgroundColor:C.amberLt,borderWidth:2},
   cardIcon:{fontSize:28},
+  whoAvatar:{width:40,height:40,borderRadius:20,backgroundColor:C.muted,
+    alignItems:'center',justifyContent:'center'},
+  whoAvatarTxt:{color:C.white,fontSize:14,fontWeight:'800'},
   cardName:{fontSize:15,fontWeight:'700',color:C.dark},
   cardDesc:{fontSize:12,color:C.muted,marginTop:2,lineHeight:17},
   cardTime:{fontSize:11,color:C.muted,marginTop:4},
