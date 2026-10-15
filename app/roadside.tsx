@@ -190,8 +190,14 @@ export default function Roadside() {
         /* Sent to the person the client chose, at the price that person
            set. It used to go out with nobody on it and a price nobody
            had agreed to, which is how a job ended up sitting in a pool
-           that no provider could take. */
-        cleanerId: picked || '',
+           that no provider could take.
+
+           The field is providerId: addBooking reads that one and writes
+           it to both provider_id and preferred_provider_id. The old
+           cleanerId here was never read at all, which did no harm while
+           roadside jobs had nobody on them and quietly swallowed the
+           choice the moment they did. */
+        providerId: picked,
         address: locLabel || manualAddr || 'Roadside',
         date: when.date,
         time: when.time,
