@@ -11,7 +11,9 @@ import QuotePanel from '../../components/QuotePanel';
 
 const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> = {
   pending:               {label:'Waiting for provider',color:C.amber, bg:C.amberLt,   icon:'⏳'},
+  /* Left in so an old row still renders a label. Nothing writes it. */
   pending_pool:          {label:'Finding a provider',color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
+  needs_provider:        {label:'Choose a provider',  color:C.amber,  bg:C.amberLt,   icon:'👤'},
   reschedule_proposed:   {label:'New time offered', color:C.teal,   bg:C.tealLt,    icon:'📅'},
   quoted:                {label:'Quote received',   color:C.teal,   bg:C.tealLt,    icon:'💬'},
   accepted:              {label:'Accepted',          color:C.green,  bg:C.greenLt,   icon:'✅'},
@@ -46,7 +48,36 @@ const DISPUTE_REASONS = [
 ];
 
 export default function Bookings() {
-  const { bookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, releaseToPool, reassignProvider, respondToProposal, respondToQuote, hideBooking, reportNoShow, loadBookings } = useApp();
+  const { bookings: allBookings, cleaners, userId, updateStatus, clientConfirm, clientDispute, reassignProvider, respondToProposal, respondToQuote, hideBooking, reportNoShow, loadBookings } = useApp();
+
+  /* Only what this person is the client of.
+   *
+   * A provider can book services like anybody else, and their own jobs
+   * were landing on this screen while the services they had paid for
+   * appeared nowhere at all. Which side of a booking somebody is on is
+   * a property of the booking; every screen reads it off the row now
+   * rather than guessing from the account's role. */
+  const bookings = allBookings.filter(b => b.side !== 'provider');
+
+  /* Providers who have already said no to one of these jobs. They are
+     kept out of the list the client is offered next: being shown
+     somebody you turned down, or who turned you down, is exactly what
+     this change exists to prevent. */
+  const [refused, setRefused] = useState<Record<string, Set<string>>>({});
+
+  useEffect(() => {
+    const ids = bookings.map(b => b.id);
+    if (!ids.length) return;
+    (async () => {
+      const { data } = await supabase.from('job_passes')
+        .select('booking_id, provider_id').in('booking_id', ids);
+      const map: Record<string, Set<string>> = {};
+      (data || []).forEach((r:any) => {
+        (map[r.booking_id] ||= new Set()).add(r.provider_id);
+      });
+      setRefused(map);
+    })();
+  }, [allBookings.length]);
   const [refreshing, setRefreshing]   = useState(false);
   const [busy, setBusy]               = useState<string|null>(null);
   const [disputeFor, setDisputeFor]   = useState<string|null>(null);
@@ -101,7 +132,7 @@ export default function Bookings() {
 
   /** What cancelling this booking costs, in plain words */
   const cancelTerms = (b: any) => {
-    if (['pending','pending_pool','quoted','reschedule_proposed'].includes(b.status)) {
+    if (['pending','needs_provider','quoted','reschedule_proposed'].includes(b.status)) {
       return { fee:'Free', why:'Nobody has accepted it yet.' };
     }
     const start = new Date(`${b.date}T${b.time || '00:00'}:00`);
@@ -148,7 +179,6 @@ export default function Bookings() {
     }
     setBusy(null);
   };
-  const doRelease = async (id: string) => { setBusy(id); await releaseToPool(id); setBusy(null); };
 
   const doQuoteReply = async (id: string, accept: boolean) => {
     setBusy(id); await respondToQuote(id, accept); setBusy(null);
@@ -265,35 +295,49 @@ export default function Bookings() {
                 <Text>📍  </Text><Text style={st.addrTxt}>{b.address}</Text>
               </View>
 
-              {b.status==='pending' && (() => {
-                const left = b.preferredUntil ? fmtCountdown(b.preferredUntil) : null;
+              {(b.status==='pending' || b.status==='needs_provider') && (() => {
+                const left = b.status==='pending' && b.preferredUntil
+                  ? fmtCountdown(b.preferredUntil) : null;
                 if (left) {
                   return (
                     <View style={st.waitBox}>
                       <Text style={st.waitTitle}>⏳  Waiting for {cleaner?.name||'your provider'}</Text>
-                      <Text style={st.waitTxt}>We've notified them. They have priority on this job for the next few minutes.</Text>
+                      <Text style={st.waitTxt}>
+                        We've told them. If they haven't answered by then, we'll ask
+                        you to pick somebody else — your job is not handed to anyone
+                        you did not choose.
+                      </Text>
                       <Text style={st.countdown}>{left} left</Text>
                     </View>
                   );
                 }
-                // Who else could actually take this? Only people in the same
-                // trade, free to work, and not the one who went quiet.
+
+                /* Who could actually take this. In the same trade, working
+                   right now, not the one who went quiet, and not anybody
+                   who has already turned this job down. That last filter
+                   is the point of the whole change: nobody should be
+                   offered a provider they have already been let down by. */
+                const no = refused[b.id] || new Set<string>();
                 const alternatives = cleaners.filter(c =>
                   c.id !== b.providerId &&
+                  !no.has(c.id) &&
                   c.available &&
                   (!b.tradeId || ((c as any).categories || []).includes(b.tradeId))
                 );
                 const alone = alternatives.length === 0;
+                const steppedBack = b.status === 'needs_provider';
 
                 return (
                   <View style={st.chooseBox}>
                     <Text style={st.chooseTitle}>
-                      😕  Your provider hasn't responded
+                      {steppedBack
+                        ? '↩  That provider has stepped back'
+                        : "😕  Your provider hasn't responded"}
                     </Text>
                     <Text style={st.chooseTxt}>
                       {alone
-                        ? "They're the only provider covering this in your area right now, so there's nobody else to ask. Give them a little longer, send them a message, or cancel — nothing has been charged."
-                        : `They may be busy or haven't seen it yet. ${alternatives.length} other ${alternatives.length===1?'provider':'providers'} could take this.`}
+                        ? "Nobody else covering this is working at the moment, so there is nobody to ask just yet. Nothing has been charged — leave it with us or cancel, whichever you prefer."
+                        : `${alternatives.length} other ${alternatives.length===1?'provider':'providers'} could take this, at their own price.`}
                     </Text>
                     {pickFor===b.id ? (
                       <View style={st.pickList}>
@@ -316,44 +360,24 @@ export default function Bookings() {
                         </TouchableOpacity>
                       </View>
                     ) : (
-                      alone ? (
-                        <View style={st.chooseActions}>
-                          <TouchableOpacity style={[st.poolBtn,isBusy&&st.dis]} disabled={isBusy}
-                            onPress={()=>doRelease(b.id)}>
-                            <Text style={st.whiteTxt}>
-                              {isBusy?'…':'⏳  Keep waiting'}
-                            </Text>
+                      <View style={st.chooseActions}>
+                        {!alone && (
+                          <TouchableOpacity style={st.poolBtn} onPress={()=>setPickFor(b.id)}>
+                            <Text style={st.whiteTxt}>👤  Pick someone else</Text>
                           </TouchableOpacity>
-                          <TouchableOpacity style={st.pickBtn}
-                            onPress={()=>setCancelFor(b.id)}>
-                            <Text style={st.pickBtnTxt}>Cancel this request</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ) : (
-                        <View style={st.chooseActions}>
-                          <TouchableOpacity style={[st.poolBtn,isBusy&&st.dis]} disabled={isBusy}
-                            onPress={()=>doRelease(b.id)}>
-                            <Text style={st.whiteTxt}>
-                              {isBusy?'…'
-                                : alternatives.length === 1
-                                ? `🔔  Ask another provider`
-                                : '🌐  Ask the others too'}
-                            </Text>
-                          </TouchableOpacity>
-                          {alternatives.length > 1 && (
-                            <TouchableOpacity style={st.pickBtn} onPress={()=>setPickFor(b.id)}>
-                              <Text style={st.pickBtnTxt}>Pick someone myself</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      )
+                        )}
+                        <TouchableOpacity style={st.pickBtn}
+                          onPress={()=>setCancelFor(b.id)}>
+                          <Text style={st.pickBtnTxt}>Cancel this request</Text>
+                        </TouchableOpacity>
+                      </View>
                     )}
                   </View>
                 );
               })()}
 
               {(b.status==='quoted' ||
-                (b.pricingModel === 'quote' && ['pending','pending_pool','accepted'].includes(b.status))) && (
+                (b.pricingModel === 'quote' && ['pending','accepted'].includes(b.status))) && (
                 <QuotePanel
                   booking={b}
                   role="client"
@@ -398,33 +422,17 @@ export default function Bookings() {
                   </View>
 
                   <Text style={st.proposalHint}>
-                    Declining puts your job back out to every available provider —
-                    at your original time.
+                    Say no and this provider steps away. You pick somebody else,
+                    at your original time and at their own price — the job is not
+                    handed to whoever answers first.
                   </Text>
                 </View>
               )}
 
-              {b.status==='pending_pool' && (
-                <View style={st.poolBox}>
-                  {(() => {
-                    const pool = cleaners.filter(c =>
-                      c.available &&
-                      (!b.tradeId || ((c as any).categories || []).includes(b.tradeId)));
-                    return (
-                      <>
-                        <Text style={st.poolTitle}>🌐  Finding you a provider</Text>
-                        <Text style={st.poolTxt}>
-                          {pool.length === 0
-                            ? "Nobody covering this is free at the moment. We'll keep looking and message you the moment someone can take it."
-                            : pool.length === 1
-                            ? `We've notified everyone covering this in your area. You'll hear the moment someone accepts.`
-                            : `All ${pool.length} providers covering this have been notified. The first to accept takes the job.`}
-                        </Text>
-                      </>
-                    );
-                  })()}
-                </View>
-              )}
+              {/* The "finding you a provider" box is gone with the pool.
+                  Nothing is being found in the background any more: the
+                  job is either with the provider you chose, or back with
+                  you to choose again, and the block above says which. */}
 
               {b.status==='en_route' && (
                 <View style={st.trackBox}>
@@ -706,7 +714,7 @@ export default function Bookings() {
               })()}
 
               {cancelFor !== b.id &&
-               ['pending','pending_pool','reschedule_proposed','accepted'].includes(b.status) && (
+               ['pending','needs_provider','reschedule_proposed','accepted'].includes(b.status) && (
                 <TouchableOpacity style={st.cancelBooking} onPress={()=>setCancelFor(b.id)}>
                   <Text style={st.cancelBookingTxt}>Cancel Booking</Text>
                 </TouchableOpacity>

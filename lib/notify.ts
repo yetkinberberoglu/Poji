@@ -2,7 +2,10 @@ import { supabase } from './supabase';
 
 type Template =
   | 'new_job_offer'
-  | 'job_in_pool'
+  /* job_in_pool is gone with the pool. A job was never taken out of
+     one, and anyone who had taken one would have worked at a price the
+     client agreed with somebody else. */
+  | 'pick_again'
   | 'booking_confirmed'
   | 'cleaner_on_way'
   | 'cleaner_arrived'

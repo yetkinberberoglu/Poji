@@ -14,6 +14,11 @@ export default function Profile() {
   const [editAddr, setEdit]     = useState(false);
   const [saving, setSaving]     = useState(false);
   const [saved, setSaved]       = useState(false);
+  /* Whether there is a client record to edit at all. A provider who has
+     booked something has one, and until now the address block was
+     hidden from them because it keyed off the account's role — so their
+     saved address existed and they could neither see nor change it. */
+  const [hasClientRow, setHasRow] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -22,6 +27,7 @@ export default function Profile() {
       const { data } = await supabase.from('client_profiles')
         .select('default_address, default_locality, phone').eq('id', user.id).maybeSingle();
       if (data) {
+        setHasRow(true);
         setAddr(data.default_address || '');
         setLocality(data.default_locality || '');
         setPhone(data.phone || '');
@@ -40,8 +46,16 @@ export default function Profile() {
     setSaving(false); setEdit(false); setSaved(true);
     setTimeout(()=>setSaved(false), 2500);
   };
-  const completed = bookings.filter(b=>b.status==='completed').length;
-  const totalSpent = bookings.filter(b=>b.status==='completed').reduce((s,b)=>s+b.total,0);
+  /* Only the bookings this person is the client of.
+   *
+   * A provider is allowed to book services too, and their own jobs were
+   * being counted here: the figure under "Spent" was the money other
+   * people had paid THEM, labelled as money they had spent. Which side
+   * of a booking somebody is on belongs to the booking, not the
+   * account, and every screen now reads it off the row. */
+  const mine      = bookings.filter(b => b.side !== 'provider');
+  const completed = mine.filter(b=>b.status==='completed').length;
+  const totalSpent= mine.filter(b=>b.status==='completed').reduce((s,b)=>s+b.total,0);
 
   const handleSignOut = async () => {
     try { await supabase.auth.signOut({ scope: 'local' }); } catch(e) {}
@@ -59,7 +73,7 @@ export default function Profile() {
           </Text>
         </View>
         <View style={s.statsRow}>
-          {[[String(bookings.length),'Bookings'],[String(completed),'Completed'],[`€${totalSpent.toFixed(0)}`,'Spent']].map(([v,l])=>(
+          {[[String(mine.length),'Bookings'],[String(completed),'Completed'],[`€${totalSpent.toFixed(0)}`,'Spent']].map(([v,l])=>(
             <View key={l} style={s.stat}>
               <Text style={s.statVal}>{v}</Text>
               <Text style={s.statLbl}>{l}</Text>
@@ -68,7 +82,7 @@ export default function Profile() {
         </View>
       </View>
 
-      {userRole === 'client' && (
+      {(userRole === 'client' || hasClientRow) && (
         <View style={s.section}>
           <Text style={s.sectionTitle}>My default address</Text>
           {editAddr ? (

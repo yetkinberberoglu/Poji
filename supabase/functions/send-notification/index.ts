@@ -48,13 +48,17 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `Open Poji: ${d.appUrl}`;
 
 
-    case 'job_in_pool':
-      return `🌐 *Job available on Poji*\n\n`
+    /* job_in_pool is gone with the pool. A job thrown open to everyone
+       was never taken, and anyone who had taken one would have been
+       working at a price the client agreed with somebody else. */
+    case 'pick_again':
+      return `↩ *Your provider has stepped back*\n\n`
         + `📍 ${d.address}\n`
-        + `📅 ${d.date} at ${d.time}\n`
-        + `⏱ ${d.hours}h\n\n`
-        + `💰 *You earn €${Number(d.earnings).toFixed(2)}*\n\n`
-        + `First to accept gets it: ${d.appUrl}`;
+        + `📅 ${d.date} at ${d.time}\n\n`
+        + `They can't do this one after all. Nothing has been charged. `
+        + `Open Poji and choose somebody else — you'll see who is free `
+        + `and what they charge.\n\n`
+        + `${d.appUrl}`;
 
     case 'booking_confirmed':
       return `✅ *Booking confirmed*\n\n`

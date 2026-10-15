@@ -14,6 +14,10 @@ export interface Booking {
   date: string; time: string; hours: number; numWorkers: number;
   propertyType: string; serviceType: string;
   total: number; status: string; createdAt: string;
+  /** Which side of this booking you are on. A provider who books a
+      service is the client of that one, and it belongs on the client
+      screens rather than in their job list. */
+  side?: 'client' | 'provider';
   pinCode?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
@@ -119,7 +123,7 @@ interface Ctx {
   hideBooking: (id: string, who: 'client'|'provider') => Promise<void>;
   reportNoShow: (id: string) => Promise<string>;
   clientDispute: (id: string, reason: string) => Promise<void>;
-  releaseToPool: (id: string) => Promise<void>;
+  handBack: (id: string) => Promise<void>;
   reassignProvider: (id: string, newProviderId: string) => Promise<void>;
   acceptJob: (id: string, myProviderId: string) => Promise<boolean>;
   proposeTime: (id: string, date: string, time: string, note: string, myId: string) => Promise<void>;
@@ -268,22 +272,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .from('profiles').select('role').eq('id', user.id).maybeSingle();
     const role = profile?.role || 'client';
 
-    let query = supabase.from('bookings').select('*').order('created_at', { ascending: false });
+    /* Two sides, two queries.
+     *
+     * Which side of a booking somebody is on is a property of the
+     * booking, not of their account, and reading it off the account is
+     * what broke this. A provider is allowed to book services like
+     * anybody else — a plumber needs a cleaner — but the cleaner branch
+     * only ever looked at provider_id, so three jobs a provider had
+     * paid for did not appear anywhere at all, while their old work
+     * showed up in the client list instead.
+     *
+     * One query with an OR cannot do it: the hidden flag is per side,
+     * and hidden_for_provider has nothing to say about a job you are
+     * the client of.
+     */
+    const asClient = await supabase.from('bookings').select('*')
+      .eq('client_id', user.id)
+      .eq('hidden_for_client', false);
 
-    if (role === 'client') {
-      query = query.eq('client_id', user.id);
-      query = query.eq('hidden_for_client', false);
-    } else if (role === 'cleaner') {
-      query = query.or(
-        `provider_id.eq.${user.id},preferred_provider_id.eq.${user.id},released_to_pool.eq.true`
-      ).eq('hidden_for_provider', false);
-    }
+    const asProvider = role === 'cleaner'
+      ? await supabase.from('bookings').select('*')
+          /* Mine, or offered to me. Nothing else.
+             This used to include every job released to the pool, which
+             is how a provider came to see work nobody had offered them
+             and a client came to be matched with somebody they had not
+             chosen. */
+          .or(`provider_id.eq.${user.id},preferred_provider_id.eq.${user.id}`)
+          .eq('hidden_for_provider', false)
+      : { data: [] as any[], error: null };
 
-    const { data, error } = await query;
-    if (error) { console.log('loadBookings error:', error.message); return; }
+    if (asClient.error)   console.log('loadBookings (client side):',   asClient.error.message);
+    if (asProvider.error) console.log('loadBookings (provider side):', asProvider.error.message);
+    if (asClient.error && asProvider.error) return;
+
+    const seen = new Set<string>();
+    const data = [...(asClient.data || []), ...(asProvider.data || [])]
+      .filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; })
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
     if (data) {
       setBookings(data.map(b => ({
+        /* Which side this booking puts you on. Every screen reads this
+           rather than guessing from the account's role. */
+        side: b.client_id === user.id ? 'client' : 'provider',
         id: b.id,
         providerId: b.provider_id,
         clientId: b.client_id,
@@ -482,8 +513,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       labour_total: meta?.labourTotal ?? null,
       parts_total: meta?.partsTotal ?? 0,
       preferred_provider_id: b.providerId || null,
-      preferred_until: meta?.releasedToPool ? null : new Date(Date.now() + 5*60*1000).toISOString(),
-      released_to_pool: meta?.releasedToPool ?? false,
+      /* How long the chosen provider has before the client is asked to
+         pick somebody else. An hour for ordinary work — a provider
+         booked for next week will not lose the job because they were up
+         a ladder for ten minutes — and ten minutes when it is urgent,
+         where waiting an hour helps nobody.
+
+         Nothing goes to a pool any more, so when this runs out the job
+         goes back to the client rather than to strangers. */
+      preferred_until: new Date(
+        Date.now() + (meta?.isUrgent ? 10 : 60) * 60 * 1000
+      ).toISOString(),
+      released_to_pool: false,
     }).select().single();
 
     if (error) { console.log('addBooking error:', error.message); throw error; }
@@ -514,14 +555,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      if (meta?.releasedToPool) {
-        matchingProviders({ tradeId: meta?.tradeId, date: b.date, time: b.time })
-          .then(list => list.forEach(c => notify(c.id, 'job_in_pool', {
-            address: b.address, date: b.date, time: b.time, hours: b.hours,
-            earnings: Number(data.provider_payment ?? 0),
-          }, data.id)));
-      } else
-      // Tell the preferred cleaner they have a 5-minute priority window
+      /* No more telling everybody about a job nobody has been given.
+         Every booking now belongs to the provider the client chose. */
+      // Tell the chosen provider the job is theirs to take
       notify(b.providerId, 'new_job_offer', {
         address: b.address,
         date: b.date,
@@ -568,21 +604,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const releaseToPool = async (id: string) => {
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, status:'pending_pool', releasedToPool:true } : b));
-    const { error } = await supabase.from('bookings')
-      .update({ status:'pending_pool', released_to_pool:true }).eq('id', id);
-    if (error) console.log('releaseToPool error:', error.message);
-
+  /**
+   * A provider stepping away, and the job going back to the client.
+   *
+   * It used to go to a pool: open to everyone, first to accept wins. It
+   * never worked. Nobody took the jobs that landed there, and if anyone
+   * had they would have worked at the original provider's price,
+   * because accepting never repriced anything. Worse, a client who
+   * chose a name and a rating could have been sent a stranger — or
+   * somebody they had already turned down.
+   *
+   * So the job goes back to the person who is entitled to decide:
+   * the client. withdraw_offer does the work server-side and records
+   * the refusal, so this provider is not put in front of them again.
+   */
+  const handBack = async (id: string) => {
     const bk = bookings.find(x => x.id === id);
-    if (bk) {
-      const pool = await matchingProviders({
-        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.providerId,
-      });
-      pool.forEach(c => notify(c.id, 'job_in_pool', {
-        address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
-        earnings: providerEarnings(bk),
-      }, id));
+
+    const { error } = await supabase.rpc('withdraw_offer', { p_booking: id });
+    if (error) { console.log('handBack error:', error.message); throw new Error(error.message); }
+
+    setBookings(prev => prev.map(b => b.id === id
+      ? { ...b, status:'needs_provider', releasedToPool:false, providerId:'' } : b));
+
+    if (bk?.clientId) {
+      notify(bk.clientId, 'pick_again', {
+        address: bk.address, date: bk.date, time: bk.time,
+      }, id);
     }
   };
 
@@ -618,12 +666,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const { data: current } = await supabase
       .from('bookings').select('status').eq('id', id).maybeSingle();
-    if (!current || !['pending','pending_pool'].includes(current.status)) return false;
+    /* Only a job that is actually yours to take. needs_provider is not
+       on this list on purpose: that one is waiting on the client to
+       choose, and a provider helping themselves to it is exactly what
+       the pool used to allow. */
+    if (!current || current.status !== 'pending') return false;
 
     setBookings(prev => prev.map(b => b.id === id ? { ...b, status:'accepted', providerId:myProviderId } : b));
     const { error } = await supabase.from('bookings')
       .update({ status:'accepted', provider_id: myProviderId })
-      .eq('id', id).in('status', ['pending','pending_pool']);
+      .eq('id', id).eq('status', 'pending');
     if (error) { console.log('acceptJob error:', error.message); return false; }
 
     const bk = bookings.find(x => x.id === id);
@@ -758,16 +810,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }, id);
       }
     } else {
-      // back to the pool so someone else can take the original slot
+      /* The client said no to the new time, so this provider is out of
+         it. Back to the client to choose somebody else — not out to
+         everybody, which is what used to happen and meant the client
+         could end up with whoever answered first. */
       setBookings(prev => prev.map(b => b.id === id
-        ? { ...b, status:'pending_pool', releasedToPool:true, providerId:'',
+        ? { ...b, status:'needs_provider', releasedToPool:false, providerId:'',
             proposedDate: null, proposedTime: null, proposedNote: null }
         : b));
 
       const { error } = await supabase.from('bookings').update({
-        status: 'pending_pool',
-        released_to_pool: true,
+        status: 'needs_provider',
+        released_to_pool: false,
         provider_id: null,
+        preferred_provider_id: null,
+        preferred_until: null,
         proposed_date: null, proposed_time: null,
         proposed_note: null, proposed_by: null, proposed_at: null,
       }).eq('id', id);
@@ -778,15 +835,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           address: bk.address, date: bk.date, time: bk.time,
         }, id);
       }
-
-      // tell everyone else it's going spare
-      const pool = await matchingProviders({
-        tradeId: bk.tradeId, date: bk.date, time: bk.time, exclude: bk.providerId,
-      });
-      pool.forEach(c => notify(c.id, 'job_in_pool', {
-        address: bk.address, date: bk.date, time: bk.time, hours: bk.hours,
-        earnings: providerEarnings(bk),
-      }, id));
     }
   };
 
@@ -948,7 +996,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       bookings, cleaners, providers: cleaners, availableTrades, providersFor,
       addBooking, updateStatus,
       markArrived, verifyPin, finishJob, clientConfirm, clientDispute,
-      releaseToPool, reassignProvider, acceptJob, proposeTime, respondToProposal,
+      handBack, reassignProvider, acceptJob, proposeTime, respondToProposal,
       sendQuote, respondToQuote, hideBooking, reportNoShow,
       loadBookings, getCleanerById,
       userRole, userName, userId, myCategories,

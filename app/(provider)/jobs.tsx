@@ -30,7 +30,10 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
   pending:               {label:'Offered to You',  color:C.amber,  bg:C.amberLt,   icon:'🔔'},
   reschedule_proposed:   {label:'Time suggested',   color:C.teal,   bg:C.tealLt,    icon:'📅'},
   quoted:                {label:'Quote sent',       color:C.teal,   bg:C.tealLt,    icon:'💬'},
+  /* Kept only so an old row still renders a sensible label. Nothing
+     writes either of these to a job a provider can see any more. */
   pending_pool:          {label:'Open to All',     color:C.accent, bg:'#F3E8FF',   icon:'🌐'},
+  needs_provider:        {label:'Back with client',color:C.muted,  bg:C.bgAlt,     icon:'↩'},
   accepted:              {label:'Accepted',        color:C.green,  bg:C.greenLt,   icon:'✅'},
   en_route:              {label:'En Route',        color:C.teal,   bg:C.tealLt,    icon:'🚗'},
   arrived:               {label:'Arrived — PIN',   color:C.amber,  bg:C.amberLt,   icon:'🔐'},
@@ -42,7 +45,7 @@ const STATUS: Record<string,{label:string;color:string;bg:string;icon:string}> =
 };
 
 export default function ProviderScreen() {
-  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, hideBooking, loadBookings, userName, userId, myCategories, sendQuote } = useApp();
+  const { bookings, updateStatus, markArrived, verifyPin, finishJob, acceptJob, proposeTime, hideBooking, loadBookings, userName, userId, myCategories, sendQuote, handBack } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy]             = useState<string|null>(null);
   const [pinInput, setPinInput]     = useState<Record<string,string>>({});
@@ -120,17 +123,38 @@ export default function ProviderScreen() {
   const [tick, setTick]             = useState(Date.now());
   const [myStatus, setMyStatus]     = useState<string|null>(null);
   const [myApp, setMyApp]           = useState<any>(null);
+  /* Whether this provider is taking work at the moment. The column has
+     been there all along with nothing in the app to touch it, so a
+     provider who stopped for a fortnight stayed in every search and
+     kept being offered jobs they could not do. */
+  const [avail, setAvail]           = useState<boolean|null>(null);
+  const [availBusy, setAvailBusy]   = useState(false);
 
   useEffect(() => {
     (async () => {
       const { data:{ user } } = await supabase.auth.getUser();
       if (!user) return;
       const { data } = await supabase.from('cleaner_profiles')
-        .select('verification_status, signup_stage, submitted_at, rejection_reason, first_name, categories')
+        .select('verification_status, signup_stage, submitted_at, rejection_reason, first_name, categories, available')
         .eq('id', user.id).maybeSingle();
-      if (data) { setMyStatus(data.verification_status); setMyApp(data); }
+      if (data) {
+        setMyStatus(data.verification_status);
+        setMyApp(data);
+        setAvail(data.available !== false);
+      }
     })();
   }, []);
+
+  /* Through set_available rather than straight at the column, because
+     'available' is also how a suspension is enforced. Turning yourself
+     off is always allowed; turning yourself on is checked. */
+  const toggleAvail = async (on: boolean) => {
+    setAvailBusy(true); setActionError('');
+    const { data, error } = await supabase.rpc('set_available', { p_on: on });
+    if (error) setActionError(error.message);
+    else setAvail(data === true);
+    setAvailBusy(false);
+  };
 
   useEffect(() => {
     const t = setInterval(() => setTick(Date.now()), 30000);
@@ -229,21 +253,21 @@ export default function ProviderScreen() {
   };
 
   /**
-   * "Pass" means two different things depending on where the job came from.
-   * Offered directly to me -> let it go to the pool, so others get a shot.
-   * Already in the pool -> nobody to hand it to; just stop showing it to me.
+   * Passing a job.
+   *
+   * It used to mean "throw it to the pool and let somebody else have a
+   * go". There is no pool any more: the client chose this provider by
+   * name, price and rating, and if that provider says no the right
+   * person to decide what happens next is the client, not whoever
+   * happens to answer first. So passing hands it back, and records the
+   * refusal so this provider is not put in front of them again for
+   * this job.
    */
   const doPass = async (b: any) => {
     setBusy(b.id); setActionError('');
     try {
-      if (b.status === 'pending_pool') {
-        const { error } = await supabase.from('job_passes')
-          .upsert({ booking_id: b.id, provider_id: userId });
-        if (error) throw error;
-        setPassed(prev => new Set(prev).add(b.id));
-      } else {
-        await updateStatus(b.id, 'pending_pool');
-      }
+      await handBack(b.id);
+      setPassed(prev => new Set(prev).add(b.id));
     } catch (e: any) {
       setActionError(e?.message || 'That did not go through');
     }
@@ -260,6 +284,59 @@ export default function ProviderScreen() {
     }
     setBusy(null);
   };
+
+  const [confirmDrop, setConfirmDrop] = useState<string|null>(null);
+
+  const doWithdraw = async (id: string) => {
+    setBusy(id); setActionError('');
+    const { error } = await supabase.rpc('withdraw_offer', { p_booking: id });
+    if (error) setActionError(error.message);
+    else {
+      setPassed(prev => new Set(prev).add(id));
+      await loadBookings();
+    }
+    setConfirmDrop(null);
+    setBusy(null);
+  };
+
+  /**
+   * Stepping back from an offer nobody has answered.
+   *
+   * An offer you cannot take back is not an offer, it is a commitment
+   * with no end: three days of silence from a client should not keep a
+   * slot in somebody's diary. The same block serves a price quote and a
+   * time proposal, because they are the same predicament — the first
+   * version of this only covered quotes, and the job that prompted it
+   * turned out to be a time proposal.
+   */
+  const withdrawBlock = (b: any, isBusy: boolean, what: 'quote' | 'time') => (
+    confirmDrop === b.id ? (
+      <View style={s0.dropBox}>
+        <Text style={s0.dropTxt}>
+          {what === 'quote'
+            ? 'Take your quote back? '
+            : 'Take your suggested time back? '}
+          The job goes back out to other providers and leaves your list.
+          The client keeps their request — you are just stepping away from it.
+        </Text>
+        <View style={s0.dropRow}>
+          <TouchableOpacity style={s0.dropKeep} onPress={()=>setConfirmDrop(null)}>
+            <Text style={s0.dropKeepTxt}>Keep it</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s0.dropGo,isBusy&&s0.dis]} disabled={isBusy}
+            onPress={()=>doWithdraw(b.id)}>
+            <Text style={s0.dropGoTxt}>{isBusy?'…':'Withdraw'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    ) : (
+      <TouchableOpacity style={s0.withdrawBtn} onPress={()=>setConfirmDrop(b.id)}>
+        <Text style={s0.withdrawTxt}>
+          {what === 'quote' ? '↩  Withdraw my quote' : '↩  Withdraw my suggested time'}
+        </Text>
+      </TouchableOpacity>
+    )
+  );
 
   const doArrive = async (id: string) => { setBusy(id); await markArrived(id); setBusy(null); };
 
@@ -299,12 +376,20 @@ export default function ProviderScreen() {
     return myCategories.includes('cleaning');
   };
 
-  const active = bookings
-    .filter(b => !['cancelled','completed','disputed'].includes(b.status))
+  /* Work, not shopping. A provider is allowed to book services for
+     themselves, and those bookings are theirs as a client — they belong
+     on the client screens, not in the list of jobs they are being paid
+     to do. Before this, three services a provider had paid for appeared
+     nowhere at all, and their own old work turned up in the client list
+     instead. */
+  const myWork = bookings.filter(b => b.side !== 'client');
+
+  const active = myWork
+    .filter(b => !['cancelled','completed','disputed','needs_provider'].includes(b.status))
     .filter(inMyTrade)
     .filter(b => !passed.has(b.id) || b.providerId === userId)
     .sort((a,b) => (b.isUrgent ? 1 : 0) - (a.isUrgent ? 1 : 0));
-  const done   = bookings.filter(b => ['cancelled','completed','disputed'].includes(b.status));
+  const done   = myWork.filter(b => ['cancelled','completed','disputed'].includes(b.status));
   const earned = done.filter(b => b.status==='completed')
     .reduce((s,b) => s + providerEarnings(b), 0);
 
@@ -336,6 +421,36 @@ export default function ProviderScreen() {
         </View>
 
       </View>
+
+      {/* On duty or not.
+
+          Written as a sentence with the action on a button beside it,
+          rather than a pill you are expected to work out is a switch.
+          A provider could not find the paused-trade pill on the profile
+          screen for exactly that reason, and the fix there was to say
+          out loud what tapping does. Same rule here. */}
+      {myStatus === 'approved' && avail !== null && (
+        <View style={[s0.dutyBar, !avail && s0.dutyBarOff]}>
+          <View style={{flex:1}}>
+            <Text style={[s0.dutyTitle, !avail && s0.dutyTitleOff]}>
+              {avail ? '🟢  You are taking jobs' : '⏸  You are not taking jobs'}
+            </Text>
+            <Text style={s0.dutySub}>
+              {avail
+                ? 'Clients can find you and book you.'
+                : 'You are hidden from search and nothing new will be offered to you.'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[avail ? s0.dutyBtnOff : s0.dutyBtnOn, availBusy && s0.dis]}
+            disabled={availBusy}
+            onPress={()=>toggleAvail(!avail)}>
+            <Text style={[s0.dutyBtnTxt, !avail && {color:C.white}]}>
+              {availBusy ? '…' : avail ? 'Pause' : 'Start taking jobs'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {myStatus === 'approved' && <View style={s0.statsRow}>
         {[
@@ -397,7 +512,7 @@ export default function ProviderScreen() {
                 ))}
               </View>
 
-              <TouchableOpacity style={s0.gateBtn} onPress={()=>router.push('/onboarding')}>
+              <TouchableOpacity style={s0.gateBtn} onPress={()=>router.push('/provider-setup')}>
                 <Text style={s0.gateBtnTxt}>Verify my account  →</Text>
               </TouchableOpacity>
             </View>
@@ -436,7 +551,7 @@ export default function ProviderScreen() {
               ))}
             </View>
 
-            <TouchableOpacity style={s0.pendingBtn} onPress={()=>router.push('/onboarding')}>
+            <TouchableOpacity style={s0.pendingBtn} onPress={()=>router.push('/provider-setup')}>
               <Text style={s0.pendingBtnTxt}>Review my application</Text>
             </TouchableOpacity>
           </View>
@@ -591,25 +706,21 @@ export default function ProviderScreen() {
                 <Text style={s0.earningsAmt}>€{pay}</Text>
               </View>
 
-              {(b.status==='pending' || b.status==='pending_pool') && (
+              {b.status==='pending' && (
                 <>
-                  {b.status==='pending' && b.preferredUntil && (
+                  {b.preferredUntil && (
                     <View style={s0.priorityBox}>
                       <Text style={s0.priorityTxt}>
-                        ⭐  The client chose you — you have priority until{' '}
+                        ⭐  The client chose you. If you have not answered by{' '}
                         {new Date(b.preferredUntil).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                        {' '}they will be asked to pick somebody else.
                       </Text>
-                    </View>
-                  )}
-                  {b.status==='pending_pool' && (
-                    <View style={s0.poolBox}>
-                      <Text style={s0.poolTxt}>🌐  Open to every available provider — first to accept gets it</Text>
                     </View>
                   )}
                   {b.pricingModel === 'quote' ? (
                     myStatus !== 'approved' ? (
                       <TouchableOpacity style={s0.lockedBtn}
-                        onPress={()=>router.push('/onboarding')}>
+                        onPress={()=>router.push('/provider-setup')}>
                         <Text style={s0.lockedTxt}>🔒  Verify your account to quote</Text>
                       </TouchableOpacity>
                     ) : (
@@ -620,7 +731,7 @@ export default function ProviderScreen() {
                     )
                   ) : myStatus !== 'approved' ? (
                     <TouchableOpacity style={s0.lockedBtn}
-                      onPress={()=>router.push('/onboarding')}>
+                      onPress={()=>router.push('/provider-setup')}>
                       <Text style={s0.lockedTxt}>🔒  Verify your account to take this job</Text>
                     </TouchableOpacity>
                   ) : proposingFor === b.id ? (
@@ -652,17 +763,23 @@ export default function ProviderScreen() {
               )}
 
               {b.status==='quoted' && (
-                <QuotePanel booking={b} role="provider" />
+                <>
+                  <QuotePanel booking={b} role="provider" />
+                  {withdrawBlock(b, isBusy, 'quote')}
+                </>
               )}
 
               {b.status==='reschedule_proposed' && (
-                <View style={s0.waitProposal}>
-                  <Text style={s0.waitProposalTitle}>⏳  Waiting on the client</Text>
-                  <Text style={s0.waitProposalTxt}>
-                    You offered {prettyDate(b.proposedDate || '')} at {b.proposedTime}.
-                    They can take it or put the job back out to others.
-                  </Text>
-                </View>
+                <>
+                  <View style={s0.waitProposal}>
+                    <Text style={s0.waitProposalTitle}>⏳  Waiting on the client</Text>
+                    <Text style={s0.waitProposalTxt}>
+                      You offered {prettyDate(b.proposedDate || '')} at {b.proposedTime}.
+                      They can take it or put the job back out to others.
+                    </Text>
+                  </View>
+                  {withdrawBlock(b, isBusy, 'time')}
+                </>
               )}
 
               {b.status==='accepted' && (
@@ -1023,6 +1140,31 @@ const s0 = StyleSheet.create({
   myTradeTxt:{fontSize:10,fontWeight:'700',color:C.primary},
   signOutBtn:{backgroundColor:C.redLt,paddingHorizontal:14,paddingVertical:8,borderRadius:20,borderWidth:1,borderColor:'#FECACA'},
   signOutTxt:{fontSize:13,fontWeight:'700',color:C.red},
+  dutyBar:{flexDirection:'row',alignItems:'center',gap:12,marginHorizontal:20,
+    marginBottom:16,backgroundColor:C.greenLt,borderRadius:14,padding:14,
+    borderWidth:1,borderColor:'#A7F3D0'},
+  dutyBarOff:{backgroundColor:C.bgAlt,borderColor:C.border},
+  dutyTitle:{fontSize:14,fontWeight:'800',color:C.green},
+  dutyTitleOff:{color:C.muted},
+  dutySub:{fontSize:11,color:C.text,marginTop:3,lineHeight:16},
+  dutyBtnOff:{borderWidth:1.5,borderColor:C.border,borderRadius:11,
+    paddingHorizontal:14,paddingVertical:9,backgroundColor:C.white},
+  dutyBtnOn:{backgroundColor:C.green,borderRadius:11,
+    paddingHorizontal:14,paddingVertical:9},
+  dutyBtnTxt:{fontSize:12,fontWeight:'800',color:C.text},
+  withdrawBtn:{borderWidth:1.5,borderColor:C.border,borderRadius:12,
+    paddingVertical:12,alignItems:'center',backgroundColor:C.white},
+  withdrawTxt:{fontSize:13,fontWeight:'700',color:C.muted},
+  dropBox:{backgroundColor:C.amberLt,borderRadius:12,padding:14,gap:12,
+    borderWidth:1,borderColor:'#FDE68A'},
+  dropTxt:{fontSize:12,color:C.text,lineHeight:18},
+  dropRow:{flexDirection:'row',gap:10},
+  dropKeep:{flex:1,borderWidth:1.5,borderColor:C.border,borderRadius:11,
+    paddingVertical:11,alignItems:'center',backgroundColor:C.white},
+  dropKeepTxt:{fontSize:13,fontWeight:'700',color:C.text},
+  dropGo:{flex:1,backgroundColor:C.amber,borderRadius:11,paddingVertical:11,
+    alignItems:'center'},
+  dropGoTxt:{fontSize:13,fontWeight:'800',color:C.white},
   statsRow:{flexDirection:'row',paddingHorizontal:20,gap:12,marginBottom:24},
   statCard:{flex:1,backgroundColor:C.white,borderRadius:16,padding:14,alignItems:'center',...S.sm,borderWidth:1,borderColor:C.border},
   statVal:{fontSize:20,fontWeight:'800',marginBottom:4},
