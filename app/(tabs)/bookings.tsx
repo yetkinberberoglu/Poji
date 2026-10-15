@@ -187,8 +187,19 @@ export default function Bookings() {
   const doProposal = async (id: string, accept: boolean) => {
     setBusy(id); await respondToProposal(id, accept); setBusy(null);
   };
+  /* The server can refuse this now — somebody who has already turned
+     the job down, or who has switched off job alerts since the list
+     was drawn. Without the catch the refusal was invisible and the
+     button span for ever. */
   const doReassign = async (id: string, providerId: string) => {
-    setBusy(id); await reassignProvider(id, providerId); setBusy(null); setPickFor(null);
+    setBusy(id); setActionError('');
+    try {
+      await reassignProvider(id, providerId);
+      setPickFor(null);
+    } catch (e: any) {
+      setActionError(e?.message || 'That provider could not be given the job.');
+    }
+    setBusy(null);
   };
 
   const submitDispute = async (id: string) => {

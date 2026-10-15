@@ -404,13 +404,65 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * Offers whose window has run out.
+   *
+   * preferred_until was decorative until now. An hour was written onto
+   * the row when the job went out — ten minutes when it was urgent —
+   * and nothing anywhere ever read it. A provider who never answered
+   * kept the job for ever, and the client went on waiting for somebody
+   * who was not coming.
+   *
+   * There is no pg_cron on this project, so the sweep runs the way
+   * auto-confirmation already does: from whoever has the app open.
+   * expire_offer checks the clock itself and answers false while the
+   * window is open, so calling it early cannot take a job off a
+   * provider who still has time left.
+   */
+  const expireStaleOffers = async () => {
+    const { data } = await supabase
+      .from('bookings').select('id, client_id, address, date, start_time')
+      .eq('status', 'pending')
+      .not('preferred_until', 'is', null)
+      .lt('preferred_until', new Date().toISOString());
+    if (!data?.length) return;
+
+    let changed = false;
+    for (const row of data) {
+      const { data: expired, error } = await supabase
+        .rpc('expire_offer', { p_booking: row.id });
+      if (error) { console.log('expireStaleOffers skipped', row.id, error.message); continue; }
+      if (!expired) continue;
+      changed = true;
+
+      /* The client is told whichever side ran the sweep, exactly as a
+         provider stepping back tells them. Notifying only from the
+         client's own session would lose the message whenever the
+         provider's app got there first. */
+      if (row.client_id) {
+        notify(row.client_id, 'pick_again', {
+          address: row.address, date: row.date, time: row.start_time,
+        }, row.id);
+      }
+    }
+
+    if (changed) await loadBookings();
+  };
+
   useEffect(() => {
-    loadUser(); loadBookings(); loadCleaners(); autoConfirmExpired(); touchPush();
+    loadUser(); loadBookings(); loadCleaners(); autoConfirmExpired();
+    expireStaleOffers(); touchPush();
+
+    /* Ten minutes is short enough that a client watching an urgent job
+       would otherwise sit on a dead screen waiting for a reload. One
+       query a minute, and the round trip to the server only happens
+       when something has actually run out. */
+    const sweep = setInterval(expireStaleOffers, 60 * 1000);
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session) { loadUser(); loadBookings(); loadCleaners(); }
       else { setUserRole('client'); setUserName(''); setUserId(''); setBookings([]); }
     });
-    return () => subscription.unsubscribe();
+    return () => { clearInterval(sweep); subscription.unsubscribe(); };
   }, []);
 
   /**
@@ -634,25 +686,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * The client offers the job to somebody else.
+   *
+   * This used to be a plain UPDATE from here: a provider id, a
+   * five-minute deadline and nothing else. The deadline disagreed with
+   * the rest of the system, and — the expensive part — no price was
+   * ever worked out. Handing a job back correctly wipes the money,
+   * because that figure belonged to the provider who has gone, and the
+   * only thing that put a price back was the INSERT trigger. So the
+   * second provider would have been sent a booking standing at zero.
+   *
+   * offer_to_provider does the whole thing server-side: it refuses
+   * somebody who has already said no or who is not accepting work, and
+   * the price is worked out for whoever is actually being asked.
+   */
   const reassignProvider = async (id: string, newProviderId: string) => {
-    const until = new Date(Date.now() + 5*60*1000).toISOString();
-    setBookings(prev => prev.map(b => b.id === id
-      ? { ...b, providerId:newProviderId, preferredProviderId:newProviderId,
-          preferredUntil:until, releasedToPool:false, status:'pending' } : b));
-    const { error } = await supabase.from('bookings').update({
-      provider_id: newProviderId, preferred_provider_id: newProviderId,
-      preferred_until: until, released_to_pool: false, status: 'pending',
-    }).eq('id', id);
-    if (error) console.log('reassignProvider error:', error.message);
+    const { error } = await supabase.rpc('offer_to_provider', {
+      p_booking: id, p_provider: newProviderId,
+    });
+    if (error) { console.log('reassignProvider error:', error.message); throw new Error(error.message); }
 
-    const bk = bookings.find(x => x.id === id);
-    if (bk) {
-      notify(newProviderId, 'new_job_offer', {
-        address: bk.address, date: bk.date, time: bk.time,
-        hours: bk.hours, numWorkers: bk.numWorkers, serviceType: bk.serviceType,
-        earnings: providerEarnings(bk),
-      }, id);
-    }
+    await loadBookings();
+
+    /* Read back rather than reuse what was on screen: the price is the
+       new provider's, and it was computed a moment ago on the server.
+       Telling them what they will earn from the figure the last
+       provider left behind is how a wrong number reaches a phone. */
+    const { data: fresh } = await supabase.from('bookings')
+      .select('address, date, start_time, hours, num_workers, service_type, provider_payment')
+      .eq('id', id).maybeSingle();
+
+    notify(newProviderId, 'new_job_offer', {
+      address: fresh?.address, date: fresh?.date, time: fresh?.start_time,
+      hours: fresh?.hours, numWorkers: fresh?.num_workers,
+      serviceType: fresh?.service_type,
+      earnings: Number(fresh?.provider_payment ?? 0),
+    }, id);
   };
 
   const acceptJob = async (id: string, myProviderId: string): Promise<boolean> => {
