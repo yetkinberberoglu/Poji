@@ -23,10 +23,30 @@ import {
   type ServiceType, type ServiceExtra, type PropertySize, type ProviderService
 } from '../lib/services';
 
+/* The whole clock, in the order the booking day runs: from seven in
+   the morning through to six the next. The small hours sit at the end
+   because that is where they belong for the night being booked - a DJ
+   finishing at four is working Friday night, not Saturday morning - and
+   each of those chips is labelled with the day it lands on so nobody
+   has to work that out for themselves.
+   *
+   * It used to stop at 18:00, which meant a provider could tick the
+   * night slot and still never be booked for it. */
 const TIMES = [
   '07:00','08:00','09:00','10:00','11:00','12:00',
   '13:00','14:00','15:00','16:00','17:00','18:00',
+  '19:00','20:00','21:00','22:00','23:00',
+  '00:00','01:00','02:00','03:00','04:00','05:00','06:00',
 ];
+
+/* A time before this is on the following calendar day. Same boundary as
+   the night slot in lib/availability, which ends at 07:00. */
+const ROLLS_OVER_BEFORE = 7;
+
+const rollsOver = (time: string) => {
+  const h = Number((time || '').split(':')[0]);
+  return !isNaN(h) && h < ROLLS_OVER_BEFORE;
+};
 
 const DAYS_AHEAD = 30;
 const LEAD_HOURS = 2;
@@ -43,6 +63,30 @@ const GOZO = new Set([
 
 const iso = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+const nextDay = (dateStr: string) => {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return dateStr;
+  d.setDate(d.getDate() + 1);
+  return iso(d);
+};
+
+/**
+ * The calendar day the job actually starts on.
+ *
+ * The day strip is the night being booked; this is the date that goes
+ * on the row. Everything downstream - the availability check, the
+ * notice check, the summary, the booking itself - has to use this one,
+ * or the client sees Friday night and the provider is sent to Friday
+ * morning.
+ *
+ * Note the one thing this cannot express: between midnight and seven,
+ * the small hours of the night now in progress belong to yesterday's
+ * chip, and the strip starts at today. Two hours of lead time and most
+ * providers' notice period make that mostly academic.
+ */
+const startDateFor = (dateStr: string, time: string) =>
+  (!dateStr || !time) ? dateStr : (rollsOver(time) ? nextDay(dateStr) : dateStr);
 
 const buildDays = () => {
   const out: any[] = [];
@@ -479,6 +523,13 @@ export default function BookingScreen() {
    * switch. Every figure a client sees should belong to someone who
    * would turn up and do the work.
    */
+  /* The day the job starts, which is the day after the one on the strip
+     when the time is in the small hours. Everything below reads this
+     rather than `date`: the availability check, the notice check, the
+     summary and the booking row. Declared here because the grading pass
+     is the first thing that needs it. */
+  const startDate = startDateFor(date, time);
+
   /* One pass over the list, read by the cards, the footer and the
      auto-pick below, so those three can never disagree with each other.
      The date and time are known by the time anyone gets here, so the
@@ -489,7 +540,7 @@ export default function BookingScreen() {
       availability: (c as any).availability,
       notice_hours: (c as any).noticeHours,
       timeOff: (c as any).timeOff,
-    }, date, time);
+    }, startDate, time);
     const noRate = !!(q as any).noRate;
     /* Does this one ask anything the service did not? If so their figure
        can still move, and the card says "from" rather than promising a
@@ -519,8 +570,8 @@ export default function BookingScreen() {
     return totals.length ? Math.min(...totals) : null;
   })();
 
-  const dayLabel = date
-    ? new Date(date + 'T00:00:00').toLocaleDateString('en-GB',
+  const dayLabel = startDate
+    ? new Date(startDate + 'T00:00:00').toLocaleDateString('en-GB',
         { weekday:'long', day:'numeric', month:'short' })
     : '';
 
@@ -598,7 +649,9 @@ export default function BookingScreen() {
   useEffect(() => { setAnswers({}); setQty(''); }, [svc]);
 
   useEffect(() => { setManualHours(null); }, [svc, size, chosenExtras, num]);
-  useEffect(() => { if (date && time && !slotAvailable(date, time)) setTime(''); }, [date]);
+  useEffect(() => {
+    if (date && time && !slotAvailable(startDateFor(date, time), time)) setTime('');
+  }, [date]);
   /* Anything that can push the chosen provider off the list — team size,
      a new address, a new date — has to let go of them too, or the Confirm
      step quietly books someone the list no longer shows. */
@@ -671,7 +724,7 @@ export default function BookingScreen() {
       await addBooking({
         providerId: cleaner.id,
         address: isTransport ? `${fromLoc} → ${toLoc}` : (address || '12 Tower Road, Sliema'),
-        date: date || iso(new Date()),
+        date: startDate || iso(new Date()),
         time: time || '10:00',
         hours: isFixed ? (myEff?.minutes || 60) / 60 : hours,
         numWorkers: (isFixed || isQuote) ? 1 : num,
@@ -711,7 +764,7 @@ export default function BookingScreen() {
         providerName: cleaner.name,
         service: svcType.name,
         icon: svcType.icon,
-        date, time, address,
+        date: startDate, time, address,
         total,
         isQuote,
       });
@@ -1589,17 +1642,29 @@ export default function BookingScreen() {
                 <Text style={s.lbl}>Start time</Text>
                 <View style={s.chips}>
                   {TIMES.map(ti=>{
-                    const ok = slotAvailable(date, ti);
+                    /* Against the day it really starts, so 02:00 on
+                       tonight's chip is not rejected for being in the
+                       past. */
+                    const ok  = slotAvailable(startDateFor(date, ti), ti);
+                    const day = rollsOver(ti)
+                      ? new Date(nextDay(date) + 'T00:00:00')
+                          .toLocaleDateString('en-GB', { weekday:'short' })
+                      : '';
                     return (
                       <TouchableOpacity key={ti}
                         style={[s.chip, time===ti&&s.chipOn, !ok&&s.chipOff]}
                         disabled={!ok} onPress={()=>setTime(ti)}>
                         <Text style={[s.chipTxt, time===ti&&s.chipTxtOn, !ok&&s.chipTxtOff]}>{ti}</Text>
+                        {!!day && (
+                          <Text style={[s.chipDay, time===ti&&s.chipDayOn, !ok&&s.chipTxtOff]}>
+                            {day}
+                          </Text>
+                        )}
                       </TouchableOpacity>
                     );
                   })}
                 </View>
-                {date === iso(new Date()) && (
+                {startDate === iso(new Date()) && (
                   <Text style={s.leadNote}>
                     Same-day bookings need at least {LEAD_HOURS} hours' notice.
                   </Text>
@@ -1643,7 +1708,7 @@ export default function BookingScreen() {
                 ...((isFixed || !usesSize) ? []
                     : [['Property', `${sizeObj?.icon || ''} ${sizeObj?.name || ''}`]]),
                 ['Address',  address || '—'],
-                ['Date',     date ? new Date(date+'T00:00:00').toLocaleDateString('en-GB',
+                ['Date',     startDate ? new Date(startDate+'T00:00:00').toLocaleDateString('en-GB',
                                {weekday:'long', day:'numeric', month:'long'}) : '—'],
                 ['Time',     time || '—'],
                 ['On site',  isFixed
@@ -1958,6 +2023,8 @@ const s = StyleSheet.create({
   chips:{flexDirection:'row',flexWrap:'wrap',gap:8},
   chip:{paddingHorizontal:16,paddingVertical:11,borderRadius:12,backgroundColor:C.white,borderWidth:1.5,borderColor:C.border,alignItems:'center'},
   chipOn:{backgroundColor:C.primary,borderColor:C.primary},
+  chipDay:{fontSize:9,fontWeight:'700',color:C.muted,marginTop:1},
+  chipDayOn:{color:C.white},
   chipTxt:{fontSize:13,fontWeight:'600',color:C.muted},
   chipTxtOn:{color:C.white},
   chipOff:{backgroundColor:C.bg,borderColor:C.border,opacity:0.4},
