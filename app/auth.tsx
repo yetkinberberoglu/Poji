@@ -61,7 +61,12 @@ export default function Auth() {
     clear();
     if (!email) { setError('Enter your email first.'); return; }
     setLoading(true);
-    await supabase.auth.resetPasswordForEmail(email);
+    /* Same reason signUp carries one: without a redirect Supabase
+       substitutes the project's Site URL, so a reset asked for on
+       localhost comes back to the live site and vice versa. */
+    await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: siteUrl() + '/',
+    });
     setLoading(false);
     setSuccess('Reset email sent! Check your inbox.');
   };

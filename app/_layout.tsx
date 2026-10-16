@@ -10,11 +10,28 @@ import InstallPrompt from './install-prompt';
 
 export default function RootLayout() {
   const routerPath = usePathname();
+
+  /* A reset email lands back here with type=recovery in the URL. Without
+     this check steer() saw an ordinary arrival at the front door and sent
+     the person to their home screen, signed in, never having been asked
+     for a new password - so "Forgot password?" worked as a single-use
+     login and the forgotten password stayed forgotten.
+     *
+     * Read before the Supabase client consumes the hash, and the
+     * PASSWORD_RECOVERY event below catches the case where it got there
+     * first. */
+  const isRecoveryUrl = () => {
+    if (typeof window === 'undefined') return false;
+    const h = window.location.hash || '';
+    const q = window.location.search || '';
+    return h.includes('type=recovery') || q.includes('type=recovery');
+  };
   // usePathname is still '/' on the first frame, which made every deep
   // link look like the front door. The browser knows the truth straight away.
   const steer = () => {
     // Only route people arriving at the front door, or coming back from
     // sign-in. A direct link to a screen should open that screen.
+    if (isRecoveryUrl()) { router.replace('/set-password?recovery=1'); return; }
     const path = typeof window !== 'undefined' ? window.location.pathname : routerPath;
     if (!path || path === '/' || path === '/index' || path.startsWith('/auth')) routeHome();
   };
@@ -27,6 +44,9 @@ export default function RootLayout() {
          who was not signed in got thrown at the login form the moment the
          app booted — whatever page they had actually asked for. */
       if (event === 'SIGNED_OUT') { router.replace('/welcome'); return; }
+      if (event === 'PASSWORD_RECOVERY') {
+        router.replace('/set-password?recovery=1'); return;
+      }
       if (event === 'SIGNED_IN')  { steer(); }
     });
     return () => subscription.unsubscribe();
@@ -40,12 +60,12 @@ export default function RootLayout() {
         <Stack.Screen name="welcome" />
         <Stack.Screen name="auth" />
         <Stack.Screen name="verify-email" />
+        <Stack.Screen name="set-password" />
         <Stack.Screen name="client-setup" />
         <Stack.Screen name="join" />
         <Stack.Screen name="payout" />
         <Stack.Screen name="my-services" />
         <Stack.Screen name="onboarding" />
-        <Stack.Screen name="provider-setup" />
         <Stack.Screen name="admin" />
         <Stack.Screen name="admin-trades" />
         <Stack.Screen name="(tabs)" />

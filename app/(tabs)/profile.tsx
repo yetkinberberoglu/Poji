@@ -19,11 +19,15 @@ export default function Profile() {
      hidden from them because it keyed off the account's role — so their
      saved address existed and they could neither see nor change it. */
   const [hasClientRow, setHasRow] = useState(false);
+  /* Which account this is. Neither profile screen said which email
+     somebody signed up with. */
+  const [authEmail, setAuthEmail] = useState('');
 
   useEffect(() => {
     (async () => {
       const { data:{ user } } = await supabase.auth.getUser();
       if (!user) return;
+      setAuthEmail(user.email || '');
       const { data } = await supabase.from('client_profiles')
         .select('default_address, default_locality, phone').eq('id', user.id).maybeSingle();
       if (data) {
@@ -121,10 +125,22 @@ export default function Profile() {
         </View>
       )}
 
+      {/* Imported since the screen was written and never drawn, so a
+          client had no way to change what Poji sends them - while the
+          menu below claimed "Notifications: all enabled", which was a
+          hardcoded label doing nothing and possibly saying something
+          untrue. The label is gone; this is the real thing. */}
+      <PushSettings role="client" />
+
       {[
         {title:'Account', items:[
+          {icon:'📧',label:'Signed in as',sub: authEmail || '—'},
+          /* A password cannot be shown anywhere: what is stored is a
+             hash of it, not the password. Changing it is the offer. */
+          {icon:'🔑',label:'Change password',sub:'You will be asked for your current one',
+           go:'/set-password'},
           {icon:'💳',label:'Payment Methods',sub:'Cards & billing'},
-          {icon:'🔔',label:'Notifications',sub:'All enabled'},
+
           {icon:'🛡',label:'Privacy Notice',sub:'What we collect and why', go:'/legal?doc=privacy'},
           {icon:'📄',label:'Terms of Service',sub:'How Poji works',         go:'/legal?doc=terms'},
         ]},

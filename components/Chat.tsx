@@ -9,6 +9,7 @@ import { scanMessage, contactUnlocked, CONTACT_WINDOW_HOURS } from '../lib/moder
 import {
   pickPhoto, uploadChatPhoto, photoUrls, canSendPhotos, type Picked,
 } from '../lib/photos';
+import { useApp } from '../context/AppContext';
 
 type Msg = {
   id: string; booking_id: string; sender_id: string; sender_role: string;
@@ -37,6 +38,10 @@ export default function Chat({
   myId: string;
   otherName: string;
 }) {
+  /* The sender's own name, for the notification the other side gets.
+     Without it every message arrived as a bare "New message". */
+  const { userName } = useApp();
+
   const [open, setOpen]   = useState(false);
   const [msgs, setMsgs]   = useState<Msg[]>([]);
   const [text, setText]   = useState('');
@@ -212,9 +217,20 @@ export default function Chat({
           userId: otherId,
           bookingId: booking.id,
           template: 'new_message',
+          /* These keys have to be the ones the message template reads.
+             This sent fromName while the template reads senderName, so
+             the name fell through to its fallback and every message
+             landed as a bare "New message" - and in the provider's case
+             the key it did send held the RECIPIENT's name, so a client
+             would have been told that they themselves were messaging
+             them. The photo line in the template was never reached
+             either, because the fact of a photo was folded into the
+             text preview instead of being its own flag. */
           data: {
-            fromName: role === 'client' ? 'Your client' : otherName,
-            preview: body || (imagePath ? 'Sent a photo' : ''),
+            senderName: userName
+              || (role === 'client' ? 'Your client' : 'Your provider'),
+            preview: body,
+            photo: !!imagePath,
             role: role === 'client' ? 'cleaner' : 'client',
           },
         },
