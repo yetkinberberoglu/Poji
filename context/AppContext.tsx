@@ -31,6 +31,9 @@ export interface Booking {
       total. Worked out by finish_job, which owns the rounding. */
   overrunMinutes?: number | null;
   overrunAmount?: number | null;
+  /** The provider's minimum callout, frozen when the booking was
+      made. Hourly billing never goes below it. */
+  minMinutes?: number | null;
   finalTotal?: number | null;
   finalProviderPayment?: number | null;
   finalPlatformCommission?: number | null;
@@ -342,6 +345,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         actualMinutes: b.actual_minutes,
         overrunMinutes: b.overrun_minutes,
         overrunAmount: b.overrun_amount,
+        minMinutes: b.min_minutes,
         finalTotal: b.final_total,
         finalProviderPayment: b.final_provider_payment,
         finalPlatformCommission: b.final_platform_commission,
@@ -942,6 +946,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           actualMinutes: s.billed_minutes ?? null,
           overrunMinutes: s.overrun_minutes ?? null,
           overrunAmount: s.overrun_amount ?? null,
+          minMinutes: s.min_minutes ?? null,
           finalTotal: s.total ?? null,
           finalProviderPayment: s.provider_gets ?? null,
           finalPlatformCommission:

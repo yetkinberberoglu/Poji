@@ -515,6 +515,18 @@ export default function Bookings() {
                         <Text style={st.billLbl}>Time worked</Text>
                         <Text style={st.billVal}>{fmtDuration(b.actualMinutes)}</Text>
                       </View>
+                      {/* Why a twenty-minute job can cost two hours.
+                          The provider's minimum was in the database and
+                          on their settings screen but nowhere in the
+                          money until now, and a bill that shows only
+                          the time worked makes the total look wrong. */}
+                      {b.minMinutes != null &&
+                       Number(b.minMinutes) > Number(b.actualMinutes || 0) && (
+                        <View style={st.billRow}>
+                          <Text style={st.billLbl}>Minimum charge</Text>
+                          <Text style={st.billVal}>{fmtDuration(Number(b.minMinutes))}</Text>
+                        </View>
+                      )}
                       {Number(b.partsTotal) > 0 && (
                         <>
                           <View style={st.billRow}>
