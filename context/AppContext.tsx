@@ -27,6 +27,10 @@ export interface Booking {
   preferredProviderId?: string | null;
   preferredUntil?: string | null;
   actualMinutes?: number | null;
+  /** Billed minutes past the estimate, and what they add to the
+      total. Worked out by finish_job, which owns the rounding. */
+  overrunMinutes?: number | null;
+  overrunAmount?: number | null;
   finalTotal?: number | null;
   finalProviderPayment?: number | null;
   finalPlatformCommission?: number | null;
@@ -336,6 +340,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         preferredProviderId: b.preferred_provider_id,
         preferredUntil: b.preferred_until,
         actualMinutes: b.actual_minutes,
+        overrunMinutes: b.overrun_minutes,
+        overrunAmount: b.overrun_amount,
         finalTotal: b.final_total,
         finalProviderPayment: b.final_provider_payment,
         finalPlatformCommission: b.final_platform_commission,
@@ -581,6 +587,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         time: b.time,
         hours: b.hours,
         model: meta?.pricingModel || 'hourly',
+        /* Decides which window the message quotes — ten minutes or an
+           hour. The row already knows; the message used to say five
+           minutes whatever the job was. */
+        urgent: !!meta?.isUrgent,
         earnings: meta?.pricingModel === 'quote'
           ? null
           : Number(data.provider_payment ?? 0),
@@ -678,13 +688,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
        Telling them what they will earn from the figure the last
        provider left behind is how a wrong number reaches a phone. */
     const { data: fresh } = await supabase.from('bookings')
-      .select('address, date, start_time, hours, num_workers, service_type, provider_payment')
+      .select('address, date, start_time, hours, num_workers, service_type, provider_payment, is_urgent')
       .eq('id', id).maybeSingle();
 
     notify(newProviderId, 'new_job_offer', {
       address: fresh?.address, date: fresh?.date, time: fresh?.start_time,
       hours: fresh?.hours, numWorkers: fresh?.num_workers,
       serviceType: fresh?.service_type,
+      urgent: !!fresh?.is_urgent,
       earnings: Number(fresh?.provider_payment ?? 0),
     }, id);
   };
@@ -929,6 +940,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           autoConfirmAt: autoAt,
           completionPhotos: photos || null,
           actualMinutes: s.billed_minutes ?? null,
+          overrunMinutes: s.overrun_minutes ?? null,
+          overrunAmount: s.overrun_amount ?? null,
           finalTotal: s.total ?? null,
           finalProviderPayment: s.provider_gets ?? null,
           finalPlatformCommission:
@@ -939,9 +952,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       : b));
 
     if (bk?.clientId) {
-      notify(bk.clientId, 'job_finished', {
-        cleanerName: userName || 'Your provider',
-      }, id);
+      /* Two messages, not one. "Please check the work and confirm" is
+         not a fair warning when the bill has grown: a job estimated at
+         two hours that took four is charged at four, and the client was
+         being told nothing about it before the six hours ran out and it
+         approved itself.
+         *
+         * The server decides which message — needs_approval is true
+         * above thirty billed minutes over the estimate — and it hands
+         * back the figures, so the quarter-hour rounding is not done a
+         * second time here in different arithmetic. */
+      if (s.needs_approval) {
+        notify(bk.clientId, 'job_overrun', {
+          cleanerName: userName || 'Your provider',
+          estimatedMinutes: Number(s.estimated_minutes) || 0,
+          billedMinutes: Number(s.billed_minutes) || 0,
+          extra: Number(s.overrun_amount || 0).toFixed(2),
+          total: Number(s.total || 0).toFixed(2),
+        }, id);
+      } else {
+        notify(bk.clientId, 'job_finished', {
+          cleanerName: userName || 'Your provider',
+        }, id);
+      }
     }
   };
 

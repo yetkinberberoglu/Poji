@@ -10,6 +10,10 @@ type Template =
   | 'cleaner_on_way'
   | 'cleaner_arrived'
   | 'job_finished'
+  /* An hourly job that ran more than thirty billed minutes past its
+     estimate. Same six-hour window as job_finished, but the client is
+     told what it now costs instead of only being asked to confirm. */
+  | 'job_overrun'
   | 'job_completed'
   | 'application_approved'
   | 'application_rejected'

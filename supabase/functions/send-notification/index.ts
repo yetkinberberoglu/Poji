@@ -28,6 +28,16 @@ const corsHeaders = {
 };
 
 // ── Message templates ──
+
+/** Minutes as somebody would say them out loud. */
+function hhmm(m: any): string {
+  const n = Math.max(0, Math.round(Number(m) || 0));
+  const h = Math.floor(n / 60);
+  const r = n % 60;
+  if (!h) return `${r}m`;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
+
 function buildMessage(template: string, d: Record<string, any>): string {
   switch (template) {
     case 'new_job_offer':
@@ -44,7 +54,12 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `📅 ${d.date} at ${d.time}\n`
         + (d.model === 'fixed' ? `` : `⏱ about ${d.hours}h\n`)
         + (d.earnings ? `💶 You'd earn €${Number(d.earnings).toFixed(2)}\n` : '')
-        + `\nYou have first refusal for 5 minutes, then it goes to everyone.\n\n`
+        /* Said five minutes and "then it goes to everyone". Neither is
+           true: the window is an hour, ten minutes when it is urgent,
+           and when it runs out the job goes back to the client to
+           choose again rather than out to strangers. */
+        + `\nIt is yours for ${d.urgent ? '10 minutes' : 'the next hour'}. `
+        + `After that the client is asked to choose somebody else.\n\n`
         + `Open Poji: ${d.appUrl}`;
 
 
@@ -82,6 +97,22 @@ function buildMessage(template: string, d: Record<string, any>): string {
         + `${d.cleanerName} marked the job as complete.\n\n`
         + `Please check the work and confirm in the app.\n`
         + `If you don't respond within 6 hours it's approved automatically.\n\n`
+        + `${d.appUrl}`;
+
+    /* An hourly job that ran well past its estimate. The six-hour
+       window and the automatic approval are the same as job_finished;
+       what is different is that the client is told what it costs while
+       they still have those six hours. Being asked to "confirm" without
+       being shown the number is not a chance to object. */
+    case 'job_overrun':
+      return `⏱ *The job took longer than estimated*\n\n`
+        + `${d.cleanerName} has finished and marked it complete.\n\n`
+        + `Estimated: ${hhmm(d.estimatedMinutes)}\n`
+        + `Worked: ${hhmm(d.billedMinutes)}\n`
+        + `That adds *€${d.extra}* — total *€${d.total}*.\n\n`
+        + `Open Poji to approve it, or raise it with them if that is not `
+        + `right. With no answer within 6 hours it is approved `
+        + `automatically.\n\n`
         + `${d.appUrl}`;
 
     case 'quote_sent':

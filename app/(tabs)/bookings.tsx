@@ -537,18 +537,39 @@ export default function Bookings() {
                         <Text style={st.billTotalLbl}>You pay</Text>
                         <Text style={st.billTotalVal}>€{Number(b.finalTotal ?? b.total).toFixed(2)}</Text>
                       </View>
-                      {b.finalTotal != null && b.estimatedTotal != null && (
-                        <Text style={st.billNote}>
-                          {(() => {
-                            const labour = Number(b.finalTotal) - Number(b.partsTotal || 0);
-                            const est    = Number(b.estimatedTotal);
-                            const diff   = +(labour - est).toFixed(2);
-                            if (diff < 0) return `The job finished early — €${Math.abs(diff).toFixed(2)} less than estimated.`;
-                            if (diff > 0) return `The job ran longer than estimated — €${diff.toFixed(2)} more.`;
-                            return 'Labour exactly as estimated.';
-                          })()}
-                        </Text>
-                      )}
+                      {/* This used to subtract parts from the final total
+                          and compare that with the estimate, which only
+                          lines up when there are no parts: the estimate
+                          carries the estimated parts and the card fee
+                          too, so on a job with parts the "difference"
+                          was simply a wrong number. The server now
+                          settles the job twice — at the time it took and
+                          at the time it was estimated to take, same parts
+                          both ways — and stores the difference. One
+                          number, from the function that owns the
+                          quarter-hour rounding. */}
+                      {b.overrunMinutes != null && b.overrunAmount != null && (() => {
+                        const mins = Number(b.overrunMinutes);
+                        const amt  = Number(b.overrunAmount);
+                        if (mins === 0 || amt === 0) {
+                          return <Text style={st.billNote}>Exactly as estimated.</Text>;
+                        }
+                        if (amt < 0) {
+                          return (
+                            <Text style={st.billNote}>
+                              Finished {fmtDuration(Math.abs(mins))} early — €{Math.abs(amt).toFixed(2)} less than estimated.
+                            </Text>
+                          );
+                        }
+                        /* Over half an hour is the point at which the
+                           client is also messaged, so it should not be
+                           a quiet grey line on the screen either. */
+                        return (
+                          <Text style={mins > 30 ? st.billAlert : st.billNote}>
+                            ⏱  Ran {fmtDuration(mins)} longer than estimated — €{amt.toFixed(2)} more.
+                          </Text>
+                        );
+                      })()}
                     </View>
                   )}
 
@@ -827,6 +848,8 @@ const st = StyleSheet.create({
   billTotalLbl:{fontSize:14,fontWeight:'800',color:C.dark},
   billTotalVal:{fontSize:18,fontWeight:'800',color:C.primary},
   billNote:{fontSize:11,color:C.green,fontWeight:'700',marginTop:2},
+  billAlert:{fontSize:12,color:C.amber,fontWeight:'800',marginTop:6,backgroundColor:C.amberLt,
+             borderRadius:8,paddingVertical:7,paddingHorizontal:9,overflow:'hidden'},
   trackBox:{backgroundColor:C.tealLt,borderRadius:10,padding:12,borderWidth:1,borderColor:'#BAE6FD',gap:4},
   trackTxt:{fontSize:13,color:C.teal,fontWeight:'700'},
   startedTxt:{fontSize:12,color:C.muted},
