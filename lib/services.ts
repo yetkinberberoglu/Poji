@@ -217,24 +217,26 @@ export function quote(opts: {
 }) {
   const SUPPLY_SURCHARGE = 2;
   const VAT_RATE   = VAT_ON_TOP;
-  const COMMISSION = 0.20;
+  const COMMISSION = LABOUR_COMMISSION;
 
   const effectiveRate = +(opts.baseRate * opts.multiplier
     + (opts.suppliesByCleaner ? SUPPLY_SURCHARGE : 0)).toFixed(2);
 
   const exVat   = +(effectiveRate * opts.hours * opts.numWorkers).toFixed(2);
-  const vat     = +(exVat * VAT_RATE).toFixed(2);
-  const service = +(exVat + vat).toFixed(2);
+  const fee     = +(exVat * CLIENT_FEE).toFixed(2);
+  const vat     = +((exVat + fee) * VAT_RATE).toFixed(2);
+  const service = +(exVat + fee + vat).toFixed(2);
   const stripe  = +(service * 0.029 + 0.30).toFixed(2);
 
   return {
     effectiveRate,
     exVat,
     vat,
+    clientFee: fee,
     stripeFee: stripe,
     clientPays: +(service + stripe).toFixed(2),
     cleanerGets: +(exVat * (1 - COMMISSION)).toFixed(2),
-    platform:    +(exVat * COMMISSION).toFixed(2),
+    platform:    +(exVat * COMMISSION + fee).toFixed(2),
   };
 }
 
@@ -274,7 +276,7 @@ export function finalQuote(opts: {
 }) {
   const SUPPLY_SURCHARGE = 2;
   const VAT_RATE   = VAT_ON_TOP;
-  const COMMISSION = 0.20;
+  const COMMISSION = LABOUR_COMMISSION;
 
   const ms      = new Date(opts.finishedAt).getTime() - new Date(opts.startedAt).getTime();
   const rawMins = Math.max(0, Math.round(ms / 60000));
@@ -285,8 +287,9 @@ export function finalQuote(opts: {
     + (opts.suppliesByCleaner ? SUPPLY_SURCHARGE : 0)).toFixed(2);
 
   const exVat   = +(effectiveRate * hours * opts.numWorkers).toFixed(2);
-  const vat     = +(exVat * VAT_RATE).toFixed(2);
-  const service = +(exVat + vat).toFixed(2);
+  const fee     = +(exVat * CLIENT_FEE).toFixed(2);
+  const vat     = +((exVat + fee) * VAT_RATE).toFixed(2);
+  const service = +(exVat + fee + vat).toFixed(2);
   const stripe  = +(service * 0.029 + 0.30).toFixed(2);
 
   return {
@@ -296,10 +299,11 @@ export function finalQuote(opts: {
     effectiveRate,
     exVat,
     vat,
+    clientFee: fee,
     stripeFee: stripe,
     total:       +(service + stripe).toFixed(2),
     cleanerGets: +(exVat * (1 - COMMISSION)).toFixed(2),
-    platform:    +(exVat * COMMISSION).toFixed(2),
+    platform:    +(exVat * COMMISSION + fee).toFixed(2),
   };
 }
 
@@ -325,11 +329,30 @@ export const VAT_ON_TOP = 0;
 export const PARTS_COMMISSION = 0.05;
 
 /**
+ * Poji's own charge to the client, on labour and parts both.
+ *
+ * It is not a cut of the provider's price, which is why it is a
+ * separate figure here and a separate column on the booking: one is a
+ * commission on somebody else's labour, the other is Poji's own revenue
+ * charged to a consumer, and their VAT treatment may differ.
+ *
+ * It sits inside the amount the card fee is taken from, because Stripe
+ * charges on what is actually captured.
+ */
+export const CLIENT_FEE = 0.05;
+
+/**
  * Fixed-price work — a filter service, an AC regas, a puncture.
  * Labour and parts are priced separately because we take a different
- * cut of each: 20% of the work, 5% of the materials.
+ * cut of each: 15% of the work, 5% of the materials.
+ *
+ * Was 20%. Lowered when the client service fee came in: the provider
+ * keeps 85% instead of 80%, which weakens the reason to take a client
+ * off the platform, and the 5% from the client makes up the difference.
+ * Eighteen services carry their own 10% rate and keep it — the big jobs,
+ * where a high percentage is unbearable.
  */
-export const LABOUR_COMMISSION = 0.20;
+export const LABOUR_COMMISSION = 0.15;
 
 export function fixedQuote(opts: {
   labourPrice: number;
@@ -362,7 +385,8 @@ export function fixedQuote(opts: {
   const urgentFee = 0;
 
   const labourSide = +(labour + callout + urgentFee).toFixed(2);
-  const exVat      = +(labourSide + parts).toFixed(2);
+  const fee        = +((labourSide + parts) * CLIENT_FEE).toFixed(2);
+  const exVat      = +(labourSide + parts + fee).toFixed(2);
   const vat        = +(exVat * VAT_RATE).toFixed(2);
   const service    = +(exVat + vat).toFixed(2);
   const stripe     = +(service * 0.029 + 0.30).toFixed(2);
@@ -375,11 +399,14 @@ export function fixedQuote(opts: {
     labourSide,
     commissionRate: COMMISSION,
     exVat, vat,
+    clientFee: fee,
     stripeFee: stripe,
     clientPays: +(service + stripe).toFixed(2),
     labourCommission,
     partsCommission,
-    platform: +(labourCommission + partsCommission).toFixed(2),
+    /* The provider's figure does not move with the fee. It is a
+       function of what they charge and their commission, nothing else. */
+    platform: +(labourCommission + partsCommission + fee).toFixed(2),
     providerGets: +(labourSide - labourCommission + parts - partsCommission).toFixed(2),
   };
 }

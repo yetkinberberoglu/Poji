@@ -150,9 +150,23 @@ export default function Profile() {
         </View>
       ))}
 
+      {/* This box was wrong on every line. It said 18% VAT was collected
+          and remitted, when nothing in the system adds VAT at all; it
+          said the commission was 20%, which it no longer is; and it
+          asserted a VAT liability of zero, which is not something an
+          app screen should be claiming. It also contradicted the
+          landing page, which says providers account for their own VAT.
+          What it says now is what the code actually does. */}
       <View style={s.vatBox}>
-        <Text style={s.vatTitle}>💡 VAT Agency Model</Text>
-        <Text style={s.vatTxt}>Poji issues VAT invoices on behalf of cleaners. VAT (18%) is collected and remitted to Malta Tax Authority. Platform commission (20%) has zero VAT liability.</Text>
+        <Text style={s.vatTitle}>💡 How the money works</Text>
+        <Text style={s.vatTxt}>
+          Nothing is added for VAT at the end. A provider's price already contains
+          whatever VAT they owe, and they account for it themselves.{'\n\n'}
+          Poji takes 15% of the labour and 5% of materials from the provider, and
+          charges you a 5% service fee. That fee and the card processing cost are
+          already inside the price you are shown, so the figure you compare is the
+          figure you are charged.
+        </Text>
       </View>
 
       {userRole==='cleaner' && (

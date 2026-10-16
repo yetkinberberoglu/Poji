@@ -12,6 +12,7 @@ import { MultiPicker } from '../../components/Picker';
 import Avatar from '../../components/Avatar';
 import PushSettings from '../../components/PushSettings';
 import AvailabilityGrid from '../../components/AvailabilityGrid';
+import { LABOUR_COMMISSION } from '../../lib/services';
 import {
   DEFAULT_AVAILABILITY, describe, countSlots, type Availability,
 } from '../../lib/availability';
@@ -737,9 +738,11 @@ export default function ProviderProfile() {
                   <Text style={s.calcVal}>€{(Number(f.hourly_rate||0)*1.029).toFixed(2)}</Text>
                 </View>
                 <View style={s.calcRow}>
-                  <Text style={s.calcLbl}>You keep (after 20% commission)</Text>
+                  <Text style={s.calcLbl}>
+                    You keep (after {Math.round(LABOUR_COMMISSION*100)}% commission)
+                  </Text>
                   <Text style={[s.calcVal,{color:C.green}]}>
-                    €{(Number(f.hourly_rate||0)*0.8).toFixed(2)}
+                    €{(Number(f.hourly_rate||0)*(1-LABOUR_COMMISSION)).toFixed(2)}
                   </Text>
                 </View>
               </View>

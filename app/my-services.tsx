@@ -12,7 +12,8 @@ import RoutePricing from '../components/RoutePricing';
 import { cheapestRoute } from '../lib/transport';
 import {
   loadServiceTypes, loadProviderServices,
-  effectiveService, fixedQuote, optionLabel, optionDelta, unitLabour,
+  effectiveService, fixedQuote, optionLabel, optionDelta, unitLabour, quote,
+  LABOUR_COMMISSION,
   type ServiceType, type ProviderService,
 } from '../lib/services';
 
@@ -445,7 +446,7 @@ export default function MyServices() {
                                       €{p.providerGets.toFixed(2)}
                                     </Text>
                                   </View>
-                                  <Text style={s.previewNote}>20% on the work.</Text>
+                                  <Text style={s.previewNote}>15% on the work.</Text>
                                 </View>
                               );
                             })()}
@@ -517,26 +518,31 @@ export default function MyServices() {
                             {Number(draft.hourly_rate || prof.hourlyRate) > 0 && (() => {
                               const r = Number(draft.hourly_rate) || prof.hourlyRate;
                               const hrs = Number(draft.min_hours) || prof.minHours || 2;
-                              /* mirrors poji_settle_hourly: nothing on top of the
-                                 rate, card fee on the total, 20% off the labour */
-                              const exVat  = +(r * hrs).toFixed(2);
-                              const stripe = +(exVat * 0.029 + 0.30).toFixed(2);
+                              /* This worked the figures out itself, with the old
+                                 commission and no service fee, so the provider was
+                                 shown a client price the server would not charge
+                                 and a payout that was 5% short. quote() is the one
+                                 that mirrors poji_settle_hourly. */
+                              const p = quote({
+                                baseRate: r, hours: hrs, numWorkers: 1,
+                                multiplier: 1, suppliesByCleaner: false,
+                              });
                               return (
                                 <View style={s.previewBox}>
                                   <View style={s.previewRow}>
                                     <Text style={s.previewLbl}>
                                       A {hrs}h job — client pays
                                     </Text>
-                                    <Text style={s.previewVal}>€{(exVat + stripe).toFixed(2)}</Text>
+                                    <Text style={s.previewVal}>€{p.clientPays.toFixed(2)}</Text>
                                   </View>
                                   <View style={s.previewRow}>
                                     <Text style={s.previewLbl}>You keep</Text>
                                     <Text style={[s.previewVal,{color:C.green,fontWeight:'800'}]}>
-                                      €{(exVat * 0.80).toFixed(2)}
+                                      €{p.cleanerGets.toFixed(2)}
                                     </Text>
                                   </View>
                                   <Text style={s.previewNote}>
-                                    20% on the work. Longer jobs bill the real time, to
+                                    15% on the work. Longer jobs bill the real time, to
                                     the nearest quarter hour.
                                   </Text>
                                 </View>
@@ -627,7 +633,7 @@ export default function MyServices() {
                                 </Text>
                               </View>
                               <Text style={s.previewNote}>
-                                {Math.round((t.labour_commission ?? 0.20)*100)}% on the work,
+                                {Math.round((t.labour_commission ?? LABOUR_COMMISSION)*100)}% on the work,
                                 5% on the parts.
                               </Text>
                             </View>

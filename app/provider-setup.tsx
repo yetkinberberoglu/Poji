@@ -10,7 +10,7 @@ import { CATEGORIES, tradesIn, findTrade, useTrades } from '../constants/trades'
 import PhoneVerify from '../components/PhoneVerify';
 import AvailabilityGrid from '../components/AvailabilityGrid';
 import { DEFAULT_AVAILABILITY, countSlots, type Availability } from '../lib/availability';
-import { loadServiceTypes, type ServiceType } from '../lib/services';
+import { loadServiceTypes, LABOUR_COMMISSION, type ServiceType } from '../lib/services';
 import { validateIban, normaliseIban } from '../lib/iban';
 import {
   validatePhone, validateEmail, ageFrom, isFutureDate,
@@ -832,7 +832,7 @@ export default function ProviderSetup() {
                     const fields = PRICE_FIELDS[model] || [];
                     const d = svc[t.id] || blankSvc();
                     const comm = Number((t as any).labour_commission) > 0
-                      ? Number((t as any).labour_commission) : 0.20;
+                      ? Number((t as any).labour_commission) : LABOUR_COMMISSION;
                     const main = Number(model==='hourly' ? d.hourly_rate
                                  : model==='fixed' ? d.labour_price
                                  : model==='unit'  ? d.unit_price : 0);

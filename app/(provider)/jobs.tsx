@@ -10,7 +10,7 @@ import ProposeTime from '../../components/ProposeTime';
 import Chat from '../../components/Chat';
 import QuotePanel from '../../components/QuotePanel';
 import { useState, useEffect } from 'react';
-import { fmtDuration } from '../../lib/services';
+import { fmtDuration, LABOUR_COMMISSION } from '../../lib/services';
 import { directionsLink, mapsLink } from '../../lib/location';
 
 
@@ -892,8 +892,9 @@ export default function ProviderScreen() {
                       const rate = (Number(b.hourlyRate)||15) * (Number(b.serviceMultiplier)||1)
                                  + (b.suppliesBy === 'cleaner' ? 2 : 0);
                       const billed = Math.ceil(mins/15)*15;
-                      /* the rate frozen onto this booking, not a flat 20% */
-                      const keep = 1 - Number(b.commissionRate ?? 0.20);
+                      /* the rate frozen onto this booking; the fallback is
+                         today's default, for a row that never got one */
+                      const keep = 1 - Number(b.commissionRate ?? LABOUR_COMMISSION);
                       const earning = (billed/60) * rate * (b.numWorkers||1) * keep;
                       return (
                         <View style={s0.timerBox}>

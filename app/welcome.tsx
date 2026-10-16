@@ -8,6 +8,7 @@ import { C, S } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { routeHome } from '../lib/route-home';
 import { CATEGORIES, TRADES, useTrades } from '../constants/trades';
+import { LEGAL, legalAddress } from '../constants/legal';
 import Logo from '../components/Logo';
 
 /** What a share link points at, wherever the page happens to be running. */
@@ -91,8 +92,8 @@ export default function Welcome() {
         <Text style={s.doorTitle}>I do the work</Text>
         <Text style={s.doorTxt}>
           You set your own prices, service by service — an hour cooking is not
-          an hour cleaning. Poji's commission comes out of your side, so the
-          price you name is the price the client sees. Joining is free.
+          an hour cleaning. Poji's commission comes out of your side: 15%, so
+          you keep 85% of what you name. Joining is free.
         </Text>
         <View style={[s.doorBtn, s.doorBtnPro]}>
           <Text style={s.doorBtnTxt}>Get listed  →</Text>
@@ -239,8 +240,8 @@ export default function Welcome() {
           {[
             ['Nothing is added for VAT at the end',
              "A provider's price already contains whatever VAT they owe, and they account for it themselves."],
-            ['The commission comes off the provider, not you',
-             'Which is why the figure you compare is the figure you are charged.'],
+            ['One price, with nothing added at the end',
+             'The figure you compare is the figure you are charged. No fees appear at checkout.'],
             ['Hourly work is billed on time actually worked',
              'Rounded up to the next quarter hour, never the next hour.'],
             ['Card only, nothing before the work',
@@ -291,7 +292,32 @@ export default function Welcome() {
           <Text style={s.footLink}>Privacy Notice</Text>
         </TouchableOpacity>
       </View>
-      <Text style={s.footNote}>Poji · Malta and Gozo</Text>
+
+      {/* Who is behind this site.
+
+          Two reasons it is here rather than buried in the Terms. Malta and
+          the EU require a trader selling services online to say who they
+          are, where they are and how to reach them, in a place a visitor
+          can find without hunting. And anyone checking us - a client
+          deciding whether to hand over a key, Meta reviewing the WhatsApp
+          sender, Stripe reviewing the account - looks for exactly this and
+          reads its absence as an answer.
+
+          Small and quiet, but readable. Selectable because people copy the
+          VAT number. */}
+      <View style={s.legal}>
+        <Text selectable style={s.legalName}>
+          {LEGAL.brand} is operated by {LEGAL.legalName}
+        </Text>
+        <Text selectable style={s.legalLine}>{legalAddress}</Text>
+        <Text selectable style={s.legalLine}>VAT {LEGAL.vat}</Text>
+        <TouchableOpacity
+          onPress={()=>Linking.openURL(`mailto:${LEGAL.email}`)}>
+          <Text style={s.legalMail}>{LEGAL.email}</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={s.footNote}>{LEGAL.brand} · Malta and Gozo</Text>
 
       <View style={{height:34}}/>
     </ScrollView>
@@ -380,17 +406,24 @@ function Receipt() {
       ))}
       <View style={s.rTot}>
         <Text style={s.rTotLbl}>You pay</Text>
-        <Text style={s.rTotVal}>€71.30</Text>
+        <Text style={s.rTotVal}>€74.85</Text>
       </View>
       <View style={s.rSplit}>
         <Text style={s.rSplitCap}>OF WHICH</Text>
         <View style={s.rRow}>
           <Text style={s.rLbl}>Goes to your cleaner</Text>
-          <Text style={[s.rVal,{color:C.green,fontWeight:'800'}]}>€55.20</Text>
+          <Text style={[s.rVal,{color:C.green,fontWeight:'800'}]}>€58.65</Text>
         </View>
         <View style={s.rRow}>
-          <Text style={s.rLbl}>Poji's commission</Text>
+          <Text style={s.rLbl}>Poji</Text>
           <Text style={s.rVal}>€13.80</Text>
+        </View>
+        {/* The card fee was missing, so the three figures never added up
+            to the total. A reader who checks the arithmetic should find
+            it correct. */}
+        <View style={s.rRow}>
+          <Text style={s.rLbl}>Card processing</Text>
+          <Text style={s.rVal}>€2.40</Text>
         </View>
       </View>
     </View>
@@ -565,5 +598,11 @@ const s = StyleSheet.create({
     marginTop:4},
   footLink:{fontSize:13,color:C.primary,fontWeight:'600'},
   footDot:{color:C.muted},
-  footNote:{fontSize:12,color:C.muted,textAlign:'center'},
+
+  legal:{alignItems:'center',gap:2,marginTop:18,paddingHorizontal:20},
+  legalName:{fontSize:12,color:C.text,fontWeight:'600',textAlign:'center'},
+  legalLine:{fontSize:12,color:C.muted,textAlign:'center'},
+  legalMail:{fontSize:12,color:C.primary,textAlign:'center',marginTop:2},
+
+  footNote:{fontSize:12,color:C.muted,textAlign:'center',marginTop:14},
 });
