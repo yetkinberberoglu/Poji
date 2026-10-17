@@ -106,6 +106,27 @@ export default function Welcome() {
     <ScrollView style={s.wrap} contentContainerStyle={s.scroll}
       showsVerticalScrollIndicator={false}>
 
+      {/* Signing in was a line of small print under the two doors, at the
+          bottom of the first screenful. That is the wrong place for it:
+          a visitor reads the pitch once, and after that every visit is
+          somebody coming back who wants the door they already have a key
+          to. The doors stay where they are - they are what a new visitor
+          is here for - and this is for everyone else.
+          *
+          Sign up carries no role, so the auth screen opens on its own
+          picker with client selected, which is the sensible default for
+          anyone who did not come through a door. */}
+      <View style={s.topBar}>
+        <TouchableOpacity style={s.barGhost}
+          onPress={()=>router.push('/auth?mode=login')}>
+          <Text style={s.barGhostTxt}>Sign in</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.barSolid}
+          onPress={()=>router.push('/auth?mode=register')}>
+          <Text style={s.barSolidTxt}>Sign up</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={[s.top, wide && s.topWide]}>
 
         {/* ── left: the pitch ── */}
@@ -356,9 +377,14 @@ function Phone() {
         <Text style={s.pLbl}>CHOOSE YOUR PROVIDER</Text>
         <Text style={s.pHint}>Each provider sets their own price.</Text>
 
+        {/* The rate is the provider's own figure; the total is what the
+            client actually pays for the job, which is the thing being
+            compared. These disagreed with each other and with the
+            receipt below: 22 an hour was shown against a 69 euro total
+            for three hours, which is 66, and the receipt said 23. */}
         {[
-          { n:'Marija', r:'€22/hr', t:'€69', h:'3h', on:true },
-          { n:'Carmelo', r:'€25/hr', t:'€77', h:'3h', on:false },
+          { n:'Marija', r:'€23/hr', t:'€74.85', h:'3h', on:true },
+          { n:'Carmelo', r:'€25/hr', t:'€81.33', h:'3h', on:false },
         ].map(p=>(
           <View key={p.n} style={[s.pCard, p.on && s.pCardOn]}>
             <View style={[s.pAvatar, p.on && {backgroundColor:C.primary}]}>
@@ -378,7 +404,7 @@ function Phone() {
         <View style={s.pFoot}>
           <View>
             <Text style={s.pFootLbl}>From</Text>
-            <Text style={s.pFootVal}>€69.00</Text>
+            <Text style={s.pFootVal}>€74.85</Text>
           </View>
           <View style={s.pFootBtn}>
             <Text style={s.pFootBtnTxt}>Continue →</Text>
@@ -394,10 +420,21 @@ function Receipt() {
   return (
     <View style={s.receipt}>
       <Text style={s.rTitle}>Three hours of cleaning</Text>
+      {/* The service fee is inside the first line rather than on one of
+          its own, which is how the client sees it everywhere else: one
+          price, nothing added at the end. That is also why the line does
+          not quote an hourly rate - 23 an hour for three hours is 69,
+          and the figure here is 72.45. The rate is on the provider card
+          above, where it belongs.
+          *
+          These three lines were left at their old values when the
+          totals below were updated, so the receipt added up to 71.30
+          and then claimed 74.85. Both halves of a number have to move
+          together. */}
       {[
-        ['Cleaning, 3 hours at €23.00', '€69.00'],
+        ['Cleaning, 3 hours', '€72.45'],
         ['VAT added by Poji', '€0.00'],
-        ['Card fee', '€2.30'],
+        ['Card fee', '€2.40'],
       ].map(([l,v])=>(
         <View key={l} style={s.rRow}>
           <Text style={s.rLbl}>{l}</Text>
@@ -432,6 +469,14 @@ function Receipt() {
 
 const s = StyleSheet.create({
   wrap:{flex:1,backgroundColor:C.bg},
+  topBar:{flexDirection:'row',justifyContent:'flex-end',alignItems:'center',gap:9,
+    marginBottom:4},
+  barGhost:{paddingHorizontal:15,paddingVertical:10,borderRadius:11,
+    borderWidth:1.5,borderColor:C.border,backgroundColor:C.white},
+  barGhostTxt:{fontSize:13,fontWeight:'700',color:C.primary},
+  barSolid:{paddingHorizontal:17,paddingVertical:10,borderRadius:11,
+    backgroundColor:C.primary},
+  barSolidTxt:{fontSize:13,fontWeight:'700',color:C.white},
   scroll:{paddingHorizontal:20,paddingTop:48,paddingBottom:20,gap:26,
     maxWidth:1080,width:'100%',alignSelf:'center'},
 
