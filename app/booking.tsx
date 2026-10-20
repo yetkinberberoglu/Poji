@@ -346,6 +346,19 @@ export default function BookingScreen() {
      rather than leave them reading "Nobody available" about themselves. */
   const bookingSelf = !!myId && !!params.providerId && params.providerId === myId;
 
+  /* The list is empty because the only person who does this work is the
+     person looking at it.
+     *
+     * bookingSelf above only catches somebody who opened their own
+     * profile and pressed Book. Coming at it through the services list,
+     * the same situation fell through to "Nobody available", which is
+     * both wrong and unhelpful: there IS somebody, it is you, and no
+     * change of address or time will fix it. notMe has already taken
+     * them out of inTrade, so asking whether they would otherwise have
+     * been in it is the whole test. */
+  const onlyMe = inTrade.length === 0 && !!myId
+    && cleaners.some(c => c.id === myId && offersService(c));
+
   const lockedCleaner  = cleaners.find(c => c.id === params.providerId) || null;
   const lockedCapacity = lockedCleaner ? teamSizeOf(lockedCleaner) : 0;
   const cleaner = cleaners.find(c => c.id === pickedCleaner) || null;
@@ -1426,11 +1439,13 @@ export default function BookingScreen() {
             {capable.length === 0 ? (
               <View style={s.emptyBox}>
                 <Text style={s.emptyIcon}>
-                  {bookingSelf ? '🪞' : lockedToCleaner ? '👥' : jobLocality && inTrade.length > 0 ? '📍' : '👥'}
+                  {bookingSelf || onlyMe ? '🪞' : lockedToCleaner ? '👥' : jobLocality && inTrade.length > 0 ? '📍' : '👥'}
                 </Text>
                 <Text style={s.emptyTxt}>
                   {bookingSelf
                     ? 'That one is you'
+                    : onlyMe
+                    ? 'You are the only one who does this'
                     : lockedToCleaner
                     ? `${lockedCleaner?.name || 'This provider'} can't cover this`
                     : jobLocality && inTrade.length > 0
@@ -1440,6 +1455,8 @@ export default function BookingScreen() {
                 <Text style={s.emptySub}>
                   {bookingSelf
                     ? 'You cannot book your own services. Everything else about booking works the same — pick somebody else and carry on.'
+                    : onlyMe
+                    ? 'You offer this work yourself and nobody else does yet, so there is nobody to book. Changing the address or the time will not help — somebody has to be on the other side of the job.'
                     : jobLocality && inTrade.length > 0 && !lockedToCleaner
                     ? `${inTrade.length} ${inTrade.length === 1 ? 'provider does' : 'providers do'} this work, but none of them list ${jobLocality} as an area they travel to.`
                     : 'Try a different option for this job.'}
@@ -1449,7 +1466,7 @@ export default function BookingScreen() {
                     onPress={()=>{ setLocked(false); setPicked(null); }}>
                     <Text style={s.emptyBtnTxt}>Compare other providers</Text>
                   </TouchableOpacity>
-                ) : jobLocality && inTrade.length > 0 && placeStep >= 0 ? (
+                ) : !onlyMe && jobLocality && inTrade.length > 0 && placeStep >= 0 ? (
                   <TouchableOpacity style={s.emptyBtn} onPress={()=>setStep(placeStep)}>
                     <Text style={s.emptyBtnTxt}>Change the address</Text>
                   </TouchableOpacity>

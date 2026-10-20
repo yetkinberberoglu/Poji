@@ -1060,8 +1060,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     workingNow.flatMap(c => (c as any).categories || [])
   ));
 
+  /* Never yourself.
+   *
+   * The booking screen has always applied this - a provider is not
+   * offered to themselves and not counted among the people available for
+   * their own job - but the count on the services list did not, so the
+   * two screens disagreed. A plumber signed in as themselves was told
+   * "1 provider available", tapped through, and met "Nobody available",
+   * because they were the one provider. Here rather than on that screen,
+   * so every count and every list made from this function agrees: the
+   * services list, the roadside candidates, the on-call figure.
+   *
+   * availableTrades deliberately does NOT exclude them. Whether a trade
+   * exists on Poji at all is not a question about who is looking, and
+   * hiding your own trade from yourself would make the category vanish
+   * from your own home screen. */
   const providersFor = (tradeId: string) =>
-    workingNow.filter(c => ((c as any).categories || []).includes(tradeId));
+    workingNow.filter(c => (!userId || c.id !== userId))
+              .filter(c => ((c as any).categories || []).includes(tradeId));
 
   return (
     <AppContext.Provider value={{
